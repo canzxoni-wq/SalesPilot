@@ -41,7 +41,7 @@ if not st.session_state.get("authenticated", False):
     with st.form("login"):
         user = st.text_input("Username")
         password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Accedi", use_container_width=True)
+        submitted = st.form_submit_button("Accedi", width="stretch")
     if submitted:
         if hmac.compare_digest(user, USERNAME) and hmac.compare_digest(password, PASSWORD):
             st.session_state.authenticated = True
@@ -217,7 +217,17 @@ REGOLE PER LE TABELLE:
     payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
     response = requests.post(url, params={"key": API_KEY}, json=payload, timeout=110)
     if not response.ok:
-        raise RuntimeError(f"Gemini API HTTP {response.status_code}. Controlla modello, chiave API e limiti di utilizzo.")
+        try:
+            error_obj = response.json().get("error", {})
+            detail = error_obj.get("message", "Nessun dettaglio restituito dall’API")
+            status = error_obj.get("status", "sconosciuto")
+        except (ValueError, AttributeError):
+            detail = "Risposta di errore non in formato JSON"
+            status = "sconosciuto"
+        # Non stampare mai URL della richiesta, payload, password o chiave API.
+        detail = str(detail).replace(API_KEY, "[CHIAVE_OSCURATA]")[:500]
+        print(f"ERRORE GEMINI CHIAMATA PRINCIPALE | HTTP {response.status_code} | status={status} | {detail}", flush=True)
+        raise RuntimeError(f"Gemini API HTTP {response.status_code}. Controlla i log di Render cercando 'ERRORE GEMINI'.")
     data = response.json()
     candidates = data.get("candidates", [])
     if not candidates:
@@ -346,7 +356,7 @@ def show_result(item):
         number = "4.1" if key == "contatti" else ("5" if key == "servizi_cxi" else str(idx))
         st.subheader(f"{number}. {title}")
         df = pd.DataFrame(item["tables"].get(key, [])).reindex(columns=columns, fill_value="")
-        st.dataframe(df, use_container_width=True, hide_index=True)
+        st.dataframe(df, width="stretch", hide_index=True)
         if df.empty:
             st.caption("Nessun dato verificabile disponibile per questa sezione.")
     st.download_button("📥 Scarica Excel delle 6 tabelle", data=excel_bytes(item["tables"]),
@@ -357,7 +367,7 @@ def show_result(item):
 with st.sidebar:
     st.header("SalesPilot · Beta")
     mode = st.radio("Modalità", ["Demo (senza API)", "Gemini (API)"], index=1)
-    if st.button("➕ Nuova ricerca", use_container_width=True):
+    if st.button("➕ Nuova ricerca", width="stretch"):
         st.session_state.selected_id = None
         st.rerun()
     st.divider()
@@ -365,15 +375,15 @@ with st.sidebar:
     st.caption(f"Ultime {MAX_HISTORY} ricerche della sessione")
     for item in reversed(st.session_state.history):
         label = f"{item['date']} · {item['query'][:38]}"
-        if st.button(label, key=f"history_{item['id']}", use_container_width=True):
+        if st.button(label, key=f"history_{item['id']}", width="stretch"):
             st.session_state.selected_id = item["id"]
             st.rerun()
-    if st.session_state.history and st.button("🗑️ Cancella cronologia", use_container_width=True):
+    if st.session_state.history and st.button("🗑️ Cancella cronologia", width="stretch"):
         st.session_state.history = []
         st.session_state.selected_id = None
         st.rerun()
     st.divider()
-    if st.button("Esci", use_container_width=True):
+    if st.button("Esci", width="stretch"):
         st.session_state.clear()
         st.rerun()
 
