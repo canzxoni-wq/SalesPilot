@@ -3,7 +3,8 @@ import json
 import os
 import re
 import hmac
-from urllib.parse import urlparse
+import html
+from urllib.parse import urlparse, quote
 from datetime import datetime
 
 import pandas as pd
@@ -241,6 +242,7 @@ def enrich_revenue_tavily(tables):
         if found:
             evidence[company] = found
     if not evidence:
+        print("FATTURATI: Tavily non ha restituito evidenze finanziarie", flush=True)
         return "Fatturati: ricerca web non disponibile o senza risultati."
 
     company_list = [r["Azienda"] for r in missing]
@@ -290,11 +292,53 @@ def enrich_revenue_tavily(tables):
                 updated += 1
                 continue
             allowed = {e["url"] for e in evidence.get(company, [])}
-            if source not in allowed:
+            source_key = source.rstrip("/").split("?", 1)[0]
+            supported = next((u for u in allowed if u.rstrip("/").split("?", 1)[0] == source_key), None)
+            if not supported:
                 continue
             row["Fatturato"] = value
-            row["Fonte"] = source
+            row["Fonte"] = supported
             updated += 1
+        # Secondo passaggio soltanto per i fatturati ancora mancanti: richieste piccole,
+        # per evitare che una risposta JSON cumulativa faccia perdere tutti i valori.
+        for row in missing:
+            if str(row.get("Fatturato", "")).strip().casefold() not in missing_labels:
+                continue
+            company = str(row["Azienda"]).strip()
+            snippets = evidence.get(company, [])
+            if not snippets:
+                continue
+            focused_prompt = (
+                "Estrai il FATTURATO/ricavi della seguente azienda dalle fonti di ricerca. "
+                "Accetta il fatturato del gruppo SOLO indicandolo con (gruppo). "
+                "Non usare EBITDA, utile o capitalizzazione. "
+                "Restituisci JSON con Fatturato (valore in euro e anno), Fonte (URL esatto fra le fonti). "
+                "Se non esiste evidenza sufficiente, restituisci Fatturato vuoto. "
+                "AZIENDA: " + company + " FONTI: " + json.dumps(snippets, ensure_ascii=False)[:11000]
+            )
+            try:
+                r2 = requests.post(url, params={"key": API_KEY}, json={
+                    "contents": [{"parts": [{"text": focused_prompt}]}],
+                    "generationConfig": {"temperature": 0, "responseMimeType": "application/json"}
+                }, timeout=55)
+                if not r2.ok:
+                    print(f"FATTURATO SINGOLO {company}: HTTP {r2.status_code}", flush=True)
+                    continue
+                parsed = extract_json("\n".join(part.get("text", "") for part in r2.json()["candidates"][0]["content"]["parts"]))
+                val = str(parsed.get("Fatturato", "")).strip()
+                src = str(parsed.get("Fonte", "")).strip()
+                if (re.search(r"\b20\d{2}\b", val)
+                        and any(unit in val.casefold() for unit in ("€", "eur", "euro"))
+                        and re.search(r"\d", re.sub(r"\b20\d{2}\b", "", val))):
+                    allowed = {e["url"] for e in snippets}
+                    canonical = next((u for u in allowed if u.rstrip("/").split("?", 1)[0]
+                                      == src.rstrip("/").split("?", 1)[0]), None)
+                    if canonical:
+                        row["Fatturato"] = val
+                        row["Fonte"] = canonical
+                        updated += 1
+            except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
+                print(f"FATTURATO SINGOLO {company}: {type(exc).__name__}", flush=True)
         print(f"FATTURATI compilati={updated} cercati={len(missing)}", flush=True)
         return f"Fatturati: {updated} valori con anno recuperati o stimati esplicitamente su {len(missing)} aziende."
     except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
@@ -431,7 +475,7 @@ CATALOGO SERVIZI CXI (Company Profile CXI 2026 + Use Case):
 - Esempi di matching dal materiale CXI: rebranding/acquisizioni -> Consulting X armonizzazione processi + Operations X supporto contatti; concessionarie in espansione -> Operations X BDC e gestione lead + Consulting X modello BDC; poliambulatori in espansione -> Operations X prenotazioni + Consulting X standard accoglienza.
 
 REGOLE PER LE TABELLE:
-- 'new_names': restituisci solo aziende reali; il campo 'Fatturato' è OBBLIGATORIO quando esiste una fonte attendibile, con importo e anno, distinguendo il dato del gruppo da quello della società. Non usare 'Non verificato' per comodità, ma non inventare importi. Se manca una fonte ma conosci una cifra plausibile, indica esplicitamente 'Stima: X € (ANNO)'; non presentare mai una stima come dato verificato. Se non conosci alcun valore affidabile, scrivi 'Dato non disponibile'. Se la richiesta specifica clienti energia, ricavi, sedi, o altre soglie, riporta quei dati in 'Altri dati chiave'. 'Fonte' deve contenere URL autentici e pertinenti se conosciuti con sufficiente certezza, altrimenti 'Non verificato'.
+- 'new_names': restituisci solo aziende reali; ricerca attivamente ricavi/fatturato per ogni azienda; il campo 'Fatturato' è OBBLIGATORIO quando esiste una fonte attendibile, con importo e anno, distinguendo il dato del gruppo da quello della società. Non usare 'Non verificato' per comodità, ma non inventare importi. Se manca una fonte ma conosci una cifra plausibile, indica esplicitamente 'Stima: X € (ANNO)'; non presentare mai una stima come dato verificato. Se non conosci alcun valore affidabile, scrivi 'Dato non disponibile'. Se la richiesta specifica clienti energia, ricavi, sedi, o altre soglie, riporta quei dati in 'Altri dati chiave'. 'Fonte' deve contenere URL autentici e pertinenti se conosciuti con sufficiente certezza, altrimenti 'Non verificato'.
 - OBBLIGATORIO: ogni elemento di new_names deve avere 'Azienda' non vuota. Se non sai identificare un'impresa reale, cerca un'altra impresa pertinente; non lasciare nomi vuoti, non inventare aziende.
 - Se trovi MENO aziende del numero richiesto, dichiaralo ESPLICITAMENTE nella 'sintesi': «Richieste N aziende; trovate solo M aziende che soddisfano i requisiti». Spiega brevemente il motivo o i requisiti che non sei riuscito a verificare. NON riempire con aziende fuori target e NON presentare l'elenco come completo.
 - Per selezionare i prospect confronta prima più candidati e privilegia quelli con potenziale CXI (Cambiamento + Accessibilità + Volume), non semplicemente i più noti. Il ranking finale è calcolato dal codice sui candidati inclusi.
@@ -564,6 +608,37 @@ def excel_bytes(tables):
     return output.getvalue()
 
 
+
+def show_company_maps(tables):
+    """Google Maps embed tramite ricerca per azienda + città; nessuna nuova API key.
+
+    La posizione è un risultato di ricerca Google Maps, NON una sede verificata.
+    """
+    companies = tables.get("new_names", [])
+    if not companies:
+        return
+    st.subheader("6. Sedi aziendali e Google Maps")
+    st.caption("Le mappe cercano l'azienda nella città indicata. Il segnaposto non certifica l'indirizzo della sede legale.")
+    for row in companies:
+        company = str(row.get("Azienda", "")).strip()
+        city = str(row.get("Sede", "")).strip()
+        if not company:
+            continue
+        usable_city = city if city.casefold() not in ("", "non verificato", "non individuato", "dato non disponibile") else "Italia"
+        query = f"{company} {usable_city}"
+        encoded = quote(query, safe="")
+        maps_url = f"https://www.google.com/maps/search/?api=1&query={encoded}"
+        embed_url = f"https://maps.google.com/maps?q={encoded}&output=embed"
+        left, right = st.columns([1, 1.4], gap="large")
+        with left:
+            st.markdown(f"#### {html.escape(company)}")
+            st.markdown(f"**Località indicata:** {html.escape(usable_city)}")
+            st.caption("Indirizzo civico non verificato: apri Google Maps per consultare le sedi disponibili.")
+            st.link_button("📍 Apri in Google Maps", maps_url)
+        with right:
+            st.components.v1.iframe(embed_url, height=265, scrolling=False)
+        st.divider()
+
 def show_result(item):
     st.caption(f"Ricerca del {item['date']} · {item['mode']}")
     st.markdown(f"**Richiesta:** {item['query']}")
@@ -581,6 +656,7 @@ def show_result(item):
         st.dataframe(df, width="stretch", hide_index=True)
         if df.empty:
             st.caption("Nessun dato verificabile disponibile per questa sezione.")
+    show_company_maps(item["tables"])
     st.download_button("📥 Scarica Excel delle 6 tabelle", data=excel_bytes(item["tables"]),
                        file_name=f"salespilot_ricerca_{item['id']}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
