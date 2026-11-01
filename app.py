@@ -20,7 +20,6 @@ PASSWORD = os.getenv("SALESPILOT_PASSWORD") or os.getenv("CXI_PASSWORD", "")
 API_KEY = os.getenv("GEMINI_API_KEY", "")
 MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 MAX_HISTORY = 10
-WEB_SEARCH_ENABLED = os.getenv("SALESPILOT_WEB_SEARCH", "true").lower() in ("true", "1", "yes")
 
 SHEETS = {
     "1. New Names": ["Azienda", "Sede", "Fatturato", "Altri dati chiave", "Fonte"],
@@ -216,19 +215,7 @@ REGOLE PER LE TABELLE:
 """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
     payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
-    # Google Search Grounding nella chiamata principale, senza cambiare modello.
-    # Il modello decide se effettuare effettivamente una ricerca.
-    if WEB_SEARCH_ENABLED:
-        payload["tools"] = [{"google_search": {}}]
     response = requests.post(url, params={"key": API_KEY}, json=payload, timeout=110)
-    # Alcune combinazioni modello/JSON/search non sono supportate: in quel caso
-    # si riprova con la chiamata originale, segnalandolo chiaramente.
-    search_fallback = False
-    if WEB_SEARCH_ENABLED and response.status_code in (400, 422):
-        print(f"SALESPILOT WEB | richiesta grounded non supportata: HTTP {response.status_code}; ripiego senza ricerca", flush=True)
-        payload.pop("tools", None)
-        response = requests.post(url, params={"key": API_KEY}, json=payload, timeout=110)
-        search_fallback = True
     if not response.ok:
         try:
             error_obj = response.json().get("error", {})
@@ -248,40 +235,8 @@ REGOLE PER LE TABELLE:
     parts = candidates[0].get("content", {}).get("parts", [])
     raw = "\n".join(part.get("text", "") for part in parts if "text" in part)
     summary, tables = normalize_result(extract_json(raw))
-    grounding = candidates[0].get("groundingMetadata", {}) or {}
-    chunks = grounding.get("groundingChunks", [])
-    source_links = []
-    for chunk in chunks:
-        web = chunk.get("web", {}) if isinstance(chunk, dict) else {}
-        uri = str(web.get("uri", ""))
-        title = str(web.get("title", "Fonte web"))
-        parsed = urlparse(uri)
-        if parsed.scheme == "https" and parsed.netloc and uri not in [x[1] for x in source_links]:
-            source_links.append((title.replace("[", "").replace("]", "")[:90], uri))
-    searches = grounding.get("webSearchQueries", [])
-    grounded = bool(source_links or searches or grounding.get("searchEntryPoint"))
-    if WEB_SEARCH_ENABLED and grounded:
-        note = "Ricerca Google utilizzata durante la generazione. Verifica che ogni fonte supporti le informazioni riportate."
-        if source_links:
-            note += "\n\n**Fonti web consultate:** " + " · ".join(
-                f"[{title}]({uri})" for title, uri in source_links[:12])
-        # Non eseguire una seconda ricerca costosa se quella principale ha già cercato online.
-    else:
-        if WEB_SEARCH_ENABLED:
-            note = ("Ricerca web richiesta ma non confermata dai metadati Gemini; "
-                    "i risultati non sono da considerare verificati online.")
-            if search_fallback:
-                note = "Ricerca web non supportata dalla configurazione attuale; risposta generata senza ricerca online."
-        else:
-            note = "Ricerca web disattivata: risultati non verificati in tempo reale."
-        # Manteniamo il precedente approfondimento soltanto se la ricerca principale non ha cercato.
-        # Il risultato del secondo tentativo è esplicitamente segnalato.
-        if not WEB_SEARCH_ENABLED:
-            tables, extra_note = enrich_with_web(tables)
-            if extra_note:
-                note += "\n\n" + extra_note
-    print(f"SALESPILOT WEB | enabled={WEB_SEARCH_ENABLED} | grounded={grounded} | sources={len(source_links)}", flush=True)
-    return summary + "\n\n" + note, tables
+    tables, note = enrich_with_web(tables)
+    return summary + ("\n\n" + note if note else ""), tables
 
 
 def enrich_with_web(tables):
@@ -411,7 +366,6 @@ def show_result(item):
 
 with st.sidebar:
     st.header("SalesPilot · Beta")
-    st.caption("Ricerca web Google: " + ("abilitata (uso effettivo da verificare)" if WEB_SEARCH_ENABLED else "disattivata"))
     mode = st.radio("Modalità", ["Demo (senza API)", "Gemini (API)"], index=1)
     if st.button("➕ Nuova ricerca", width="stretch"):
         st.session_state.selected_id = None
