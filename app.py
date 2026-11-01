@@ -91,30 +91,20 @@ def normalize_result(result):
                 scores.append(None)
                 row[key] = "Non verificato"
         row["Totale"] = sum(scores) if all(s is not None for s in scores) else "Non verificato"
-    # Prima elimina i prospect senza nome e allinea tutte le tabelle.
-    # La graduatoria va calcolata SOLO sulle aziende effettivamente restituite:
-    # altrimenti, eliminando una riga, possono rimanere priorità 1, 2, 4, 5.
-    invalid_names = {"", "non individuato", "non verificato", "n/d", "...", "da verificare", "null", "none"}
-    unique_companies = []
-    seen = set()
-    valid_new_names = []
-    for row in tables["new_names"]:
-        name = str(row.get("Azienda", "")).strip()
-        if name.lower() in invalid_names or name.casefold() in seen:
-            continue
-        seen.add(name.casefold())
-        row["Azienda"] = name
-        valid_new_names.append(row)
-        unique_companies.append(name)
-    tables["new_names"] = valid_new_names
-    allowed = set(unique_companies)
-    for key in ("priorita", "informazioni", "contatti", "servizi_cxi"):
-        tables[key] = [r for r in tables[key] if str(r.get("Azienda", "")).strip() in allowed]
     tables["priorita"].sort(key=lambda r: (
         r["Totale"] if isinstance(r["Totale"], int) else -1,
         r["Cambiamento"] if isinstance(r["Cambiamento"], int) else -1,
         r["Accessibilità"] if isinstance(r["Accessibilità"], int) else -1,
     ), reverse=True)
+    for i, row in enumerate(tables["priorita"], start=1):
+        row["Priorità"] = i
+    # Allinea le tabelle per azienda ed evita contatti con link non plausibili.
+    # Scarta righe senza nome: non sono prospect utilizzabili.
+    tables["new_names"] = [r for r in tables["new_names"] if str(r.get("Azienda", "")).strip()]
+    companies = [r["Azienda"].strip() for r in tables["new_names"]]
+    allowed = set(companies)
+    for key in ("priorita", "informazioni", "contatti", "servizi_cxi"):
+        tables[key] = [r for r in tables[key] if r.get("Azienda") in allowed]
     for row in tables["contatti"]:
         url = str(row.get("Link di contatto", "")).strip()
         parsed = urlparse(url)
@@ -131,14 +121,6 @@ def normalize_result(result):
         for company in companies:
             if company not in existing:
                 tables[key].append({c: (company if c == "Azienda" else "Non verificato") for c in cols})
-    # Ricalcola sempre il ranking dopo filtri e integrazioni: 1, 2, 3, ...
-    tables["priorita"].sort(key=lambda r: (
-        r["Totale"] if isinstance(r.get("Totale"), int) else -1,
-        r["Cambiamento"] if isinstance(r.get("Cambiamento"), int) else -1,
-        r["Accessibilità"] if isinstance(r.get("Accessibilità"), int) else -1,
-    ), reverse=True)
-    for rank, row in enumerate(tables["priorita"], start=1):
-        row["Priorità"] = rank
     for row in tables["servizi_cxi"]:
         hook = str(row.get("Aggancio al fatto", "")).strip()
         if not hook or hook.lower() in ("da verificare", "non verificato", "n/d", "..."):
@@ -203,8 +185,6 @@ CATALOGO SERVIZI CXI (Company Profile CXI 2026 + Use Case):
 REGOLE PER LE TABELLE:
 - 'new_names': restituisci solo aziende reali; usa 'Fatturato' in generale, indicando anno se noto. Se la richiesta specifica clienti energia, ricavi, sedi, o altre soglie, riporta quei dati in 'Altri dati chiave'. 'Fonte' deve contenere URL autentici e pertinenti se conosciuti con sufficiente certezza, altrimenti 'Non verificato'.
 - OBBLIGATORIO: ogni elemento di new_names deve avere 'Azienda' non vuota. Se non sai identificare un'impresa reale, cerca un'altra impresa pertinente; non lasciare nomi vuoti, non inventare aziende.
-- Se trovi MENO aziende del numero richiesto, dichiaralo ESPLICITAMENTE nella 'sintesi': «Richieste N aziende; trovate solo M aziende che soddisfano i requisiti». Spiega brevemente il motivo o i requisiti che non sei riuscito a verificare. NON riempire con aziende fuori target e NON presentare l'elenco come completo.
-- La graduatoria deve essere consecutiva e riferita SOLO alle aziende effettivamente incluse. Non lasciare posizioni saltate (es. 1, 2, 4, 5).
 - 'priorita', 'informazioni', 'contatti', 'servizi_cxi': una riga per ogni azienda di 'new_names', senza aggiungere aziende estranee. 'informazioni' contiene fatti e indizi commerciali specifici, distinguendo ipotesi.
 - 'buyer_persona': 2–4 ruoli tipici del settore, con peso nella decisione, interesse e primo messaggio; non inserire nomi personali in questa tabella.
 - 'Aggancio al fatto': scrivi SEMPRE 2-3 frasi specifiche: (1) fatto concreto relativo a QUELLA azienda, con anno se noto, (2) bisogno commerciale che il fatto suggerisce, (3) perché il servizio principale CXI può rispondere a quel bisogno. Evita slogan, etichette e frasi telegrafiche. Se il fatto non è verificato, segnalalo chiaramente e non spacciarlo per certo.
@@ -279,36 +259,6 @@ def enrich_with_web(tables):
     except (requests.RequestException, ValueError, KeyError, IndexError, TypeError):
         return tables, "Ricerca web aggiuntiva non disponibile: i contatti non verificati non vengono inventati."
 
-def requested_company_count(query):
-    """Estrae una quantità esplicita, senza scambiare soglie economiche per numero di aziende."""
-    q = str(query).lower()
-    patterns = [
-        r"\b(?:trova|cerca|individua|seleziona|elenca|dammi|mostrami)\s+(?:almeno\s+|massimo\s+|circa\s+)?(\d{1,3})\s+(?:aziende|imprese|società|societa|gruppi|operatori|concessionarie|prospect|nomi)\b",
-        r"\b(?:almeno|massimo|circa)\s+(\d{1,3})\s+(?:aziende|imprese|società|societa|gruppi|operatori|concessionarie|prospect|nomi)\b",
-        r"\b(\d{1,3})\s+(?:aziende|imprese|società|societa|gruppi|operatori|concessionarie|prospect|nomi)\b",
-    ]
-    for pattern in patterns:
-        match = re.search(pattern, q)
-        if match:
-            return int(match.group(1))
-    return None
-
-
-def completeness_message(query, tables, demo=False):
-    if demo:
-        return None
-    expected = requested_company_count(query)
-    actual = len(tables.get("new_names", []))
-    if expected is not None and actual < expected:
-        return (f"⚠️ **Risultati incompleti:** richieste **{expected} aziende**, "
-                f"trovate solo **{actual} aziende** tra quelle restituite che soddisfano "
-                "i criteri dichiarati. Le posizioni sono state rinumerate senza salti. "
-                "I requisiti non verificati richiedono un controllo prima dell'utilizzo commerciale.")
-    if actual == 0:
-        return "⚠️ **Nessuna azienda utilizzabile individuata.** Non sono stati aggiunti nomi inventati."
-    return None
-
-
 def excel_bytes(tables):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
@@ -339,9 +289,6 @@ def show_result(item):
         st.error(item["error"])
         return
     st.markdown(item.get("summary", ""))
-    notice = completeness_message(item["query"], item["tables"], demo=item["mode"].startswith("Demo"))
-    if notice:
-        st.warning(notice)
     for idx, ((_, columns), key, title) in enumerate(zip(SHEETS.items(), KEYS, TITLES), 1):
         number = "4.1" if key == "contatti" else ("5" if key == "servizi_cxi" else str(idx))
         st.subheader(f"{number}. {title}")
