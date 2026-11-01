@@ -3,6 +3,7 @@ import json
 import os
 import re
 import hmac
+from urllib.parse import urlparse
 from datetime import datetime
 
 import pandas as pd
@@ -98,16 +99,33 @@ def normalize_result(result):
     for i, row in enumerate(tables["priorita"], start=1):
         row["Priorità"] = i
     # Allinea le tabelle per azienda ed evita contatti con link non plausibili.
-    companies = [r["Azienda"] for r in tables["new_names"] if r.get("Azienda")]
+    # Scarta righe senza nome: non sono prospect utilizzabili.
+    tables["new_names"] = [r for r in tables["new_names"] if str(r.get("Azienda", "")).strip()]
+    companies = [r["Azienda"].strip() for r in tables["new_names"]]
     allowed = set(companies)
     for key in ("priorita", "informazioni", "contatti", "servizi_cxi"):
         tables[key] = [r for r in tables[key] if r.get("Azienda") in allowed]
     for row in tables["contatti"]:
         url = str(row.get("Link di contatto", "")).strip()
-        if not url.startswith(("https://", "http://")):
+        parsed = urlparse(url)
+        if parsed.scheme not in ("https", "http") or not parsed.netloc:
             row["Link di contatto"] = "Non individuato"
         if not str(row.get("Nome e cognome", "")).strip():
             row["Nome e cognome"] = "Non individuato"
+    # Una riga per azienda anche quando il modello omette una tabella.
+    for key, cols in (("priorita", SHEETS["2. Priorità"]),
+                      ("informazioni", SHEETS["3. Info aziende"]),
+                      ("contatti", SHEETS["4.1 Contatti"]),
+                      ("servizi_cxi", SHEETS["5. Servizi CXI"])):
+        existing = {r["Azienda"] for r in tables[key]}
+        for company in companies:
+            if company not in existing:
+                tables[key].append({c: (company if c == "Azienda" else "Non verificato") for c in cols})
+    for row in tables["servizi_cxi"]:
+        hook = str(row.get("Aggancio al fatto", "")).strip()
+        if not hook or hook.lower() in ("da verificare", "non verificato", "n/d", "..."):
+            row["Aggancio al fatto"] = ("Ipotesi commerciale da verificare: "
+                "individuare un fatto aziendale concreto e spiegare come il servizio CXI risponde a quell'esigenza.")
     return str(result.get("sintesi", "")), tables
 
 
@@ -166,9 +184,12 @@ CATALOGO SERVIZI CXI (Company Profile CXI 2026 + Use Case):
 
 REGOLE PER LE TABELLE:
 - 'new_names': restituisci solo aziende reali; usa 'Fatturato' in generale, indicando anno se noto. Se la richiesta specifica clienti energia, ricavi, sedi, o altre soglie, riporta quei dati in 'Altri dati chiave'. 'Fonte' deve contenere URL autentici e pertinenti se conosciuti con sufficiente certezza, altrimenti 'Non verificato'.
+- OBBLIGATORIO: ogni elemento di new_names deve avere 'Azienda' non vuota. Se non sai identificare un'impresa reale, cerca un'altra impresa pertinente; non lasciare nomi vuoti, non inventare aziende.
 - 'priorita', 'informazioni', 'contatti', 'servizi_cxi': una riga per ogni azienda di 'new_names', senza aggiungere aziende estranee. 'informazioni' contiene fatti e indizi commerciali specifici, distinguendo ipotesi.
 - 'buyer_persona': 2–4 ruoli tipici del settore, con peso nella decisione, interesse e primo messaggio; non inserire nomi personali in questa tabella.
+- 'Aggancio al fatto': scrivi SEMPRE 2-3 frasi specifiche: (1) fatto concreto relativo a QUELLA azienda, con anno se noto, (2) bisogno commerciale che il fatto suggerisce, (3) perché il servizio principale CXI può rispondere a quel bisogno. Evita slogan, etichette e frasi telegrafiche. Se il fatto non è verificato, segnalalo chiaramente e non spacciarlo per certo.
 - 'contatti' (tabella 4.1): per ogni azienda prova a indicare una PERSONA REALE e il suo ruolo, con URL diretto pubblico al profilo professionale o pagina ufficiale di contatto. NON inventare nomi, profili LinkedIn, URL o email. Se non sei certo del nome scrivi 'Non individuato'; se non conosci un link reale scrivi 'Non individuato'. Non inserire una colonna Fonte nei contatti.
+- Se il primo nominativo non è verificabile, prova un altro responsabile pertinente (customer operations, commerciale, marketing, CX) prima di rinunciare. Non inventare persone o profili.
 - Non hai accesso garantito al web in tempo reale: non fingere di aver verificato oggi dati o contatti. Se i criteri non sono verificabili, segnalalo nella sintesi e usa 'Non verificato'; non inventare aziende o dati per raggiungere il numero richiesto.
 - Conserva esattamente i nomi delle colonne e delle chiavi JSON. Non aggiungere testo esterno al JSON.
 """
@@ -183,8 +204,60 @@ REGOLE PER LE TABELLE:
         raise RuntimeError("Gemini non ha restituito risultati.")
     parts = candidates[0].get("content", {}).get("parts", [])
     raw = "\n".join(part.get("text", "") for part in parts if "text" in part)
-    return normalize_result(extract_json(raw))
+    summary, tables = normalize_result(extract_json(raw))
+    tables, note = enrich_with_web(tables)
+    return summary + ("\n\n" + note if note else ""), tables
 
+
+def enrich_with_web(tables):
+    """Tentativo aggiuntivo di verifica tramite Google Search Grounding.
+    Se il modello/API non supporta la ricerca, lascia invariati i risultati.
+    """
+    companies = [r["Azienda"] for r in tables["new_names"]]
+    if not companies:
+        return tables, ""
+    task = {"aziende": companies, "servizi": tables["servizi_cxi"]}
+    prompt = ("Cerca sul web informazioni PUBBLICHE verificabili per queste aziende. "
+        "Per OGNI azienda cerca prima un dirigente customer experience/customer operations, "
+        "poi se non disponibile un direttore commerciale o marketing. Prova almeno due "
+        "ruoli alternativi. Indica nome e cognome SOLO se trovi una pagina pubblica "
+        "che lo associa esplicitamente a quell'azienda e al ruolo; usa link diretto "
+        "alla pagina pubblica. Mai inventare link LinkedIn o nomi. "
+        "Inoltre sviluppa per ogni azienda 'Aggancio al fatto' in 2-3 frasi: "
+        "fatto aziendale concreto con periodo, bisogno dedotto, collegamento "
+        "al servizio CXI principale già proposto. Se il fatto non è documentabile "
+        "scrivi che è un'ipotesi da verificare. "
+        "Rispondi SOLO con JSON nella forma "
+        "{\"contatti\":[{\"Azienda\":\"...\",\"Nome e cognome\":\"...\",\"Ruolo\":\"...\",\"Link di contatto\":\"https://...\"}],"
+        "\"agganci\":[{\"Azienda\":\"...\",\"Aggancio al fatto\":\"...\"}]} "
+        "Non inserire un contatto senza evidenza. DATI: "
+        + json.dumps(task, ensure_ascii=False))
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
+    payload = {"contents": [{"parts": [{"text": prompt}]}],
+               "tools": [{"google_search": {}}],
+               "generationConfig": {"temperature": 0.1}}
+    try:
+        response = requests.post(url, params={"key": API_KEY}, json=payload, timeout=110)
+        response.raise_for_status()
+        parts = response.json()["candidates"][0]["content"]["parts"]
+        raw = "\n".join(part.get("text", "") for part in parts)
+        found = extract_json(raw)
+        contact_by_company = {r.get("Azienda"): r for r in found.get("contatti", []) if isinstance(r, dict)}
+        hook_by_company = {r.get("Azienda"): r for r in found.get("agganci", []) if isinstance(r, dict)}
+        for row in tables["contatti"]:
+            c = contact_by_company.get(row["Azienda"], {})
+            name = str(c.get("Nome e cognome", "")).strip()
+            link = str(c.get("Link di contatto", "")).strip()
+            parsed = urlparse(link)
+            if name and name.lower() not in ("non individuato", "non verificato") and parsed.scheme in ("http", "https") and parsed.netloc:
+                row.update({"Nome e cognome": name, "Ruolo": c.get("Ruolo", row["Ruolo"]), "Link di contatto": link})
+        for row in tables["servizi_cxi"]:
+            hook = str(hook_by_company.get(row["Azienda"], {}).get("Aggancio al fatto", "")).strip()
+            if len(hook) >= 75:
+                row["Aggancio al fatto"] = hook
+        return tables, "Ricerca web aggiuntiva effettuata: verificare comunque che i link confermino nominativi e fatti."
+    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError):
+        return tables, "Ricerca web aggiuntiva non disponibile: i contatti non verificati non vengono inventati."
 
 def excel_bytes(tables):
     output = io.BytesIO()
