@@ -31,7 +31,7 @@ SHEETS = {
     "5. Servizi CXI": ["Azienda", "Servizio principale", "Servizio secondario", "Aggancio al fatto"],
 }
 KEYS = ["new_names", "priorita", "informazioni", "buyer_persona", "contatti", "servizi_cxi"]
-TITLES = ["Lista New Names", "Clusterizzazione e priorità", "Informazioni chiave sulle aziende", "Interlocutori e Buyer Persona", "Link e contatti suggeriti (ove trovati)", "Servizi CXI pertinenti"]
+TITLES = ["Lista New Names", "Clusterizzazione e priorità", "Informazioni chiave sulle aziende", "Interlocutori e Buyer Persona", "Contatti suggeriti", "Servizi CXI pertinenti"]
 
 if not USERNAME or not PASSWORD or PASSWORD == "CAMBIA_QUESTA_PASSWORD":
     st.error("Configura SALESPILOT_USERNAME e SALESPILOT_PASSWORD nelle variabili d'ambiente di Render.")
@@ -123,6 +123,17 @@ def normalize_result(result):
             row["Link di contatto"] = "Non individuato"
         if not str(row.get("Nome e cognome", "")).strip():
             row["Nome e cognome"] = "Non individuato"
+    # La tabella contatti non deve mai mostrare più di un nominativo per azienda.
+    seen_contacts = set()
+    filtered_contacts = []
+    for contact in tables["contatti"]:
+        company = contact.get("Azienda", "")
+        if (company not in seen_contacts
+                and contact.get("Nome e cognome", "") not in ("", "Non individuato")
+                and contact.get("Link di contatto", "") not in ("", "Non individuato")):
+            filtered_contacts.append(contact)
+            seen_contacts.add(company)
+    tables["contatti"] = filtered_contacts
     # Una riga per azienda anche quando il modello omette una tabella.
     for key, cols in (("priorita", SHEETS["2. Priorità"]),
                       ("informazioni", SHEETS["3. Info aziende"]),
@@ -139,6 +150,8 @@ def normalize_result(result):
     ), reverse=True)
     for rank, row in enumerate(tables["priorita"], start=1):
         row["Priorità"] = rank
+    rank_index = {row["Azienda"]: i for i, row in enumerate(tables["priorita"])}
+    tables["new_names"].sort(key=lambda row: rank_index.get(row["Azienda"], 9999))
     for row in tables["servizi_cxi"]:
         hook = str(row.get("Aggancio al fatto", "")).strip()
         if not hook or hook.lower() in ("da verificare", "non verificato", "n/d", "..."):
@@ -297,7 +310,7 @@ def enrich_contacts_tavily(tables):
     evidence = {}
     for row in tables["new_names"][:10]:
         company = row["Azienda"]
-        found, _ = tavily_search(f'"{company}" "customer experience" OR "customer care" OR "direttore commerciale" OR "marketing" responsabile linkedin', max_results=5)
+        found, _ = tavily_search(f'"{company}" "customer experience" OR "customer care" OR "direttore commerciale" OR "marketing" responsabile linkedin', max_results=3)
         if found:
             evidence[company] = found
     if not evidence:
@@ -306,7 +319,7 @@ def enrich_contacts_tavily(tables):
               "operations, commerciale o marketing. Una fonte deve collegare chiaramente nome, "
               "ruolo e azienda; l'URL deve essere IDENTICO a uno degli URL di fonte. "
               "Non inventare profili. Escludi recruiting, acquisti, logistica e ruoli non pertinenti. "
-              "Ometti le aziende senza persona identificabile. Rispondi SOLO JSON: "
+              "Ometti le aziende senza persona identificabile. Per ogni azienda proponi SOLO il profilo più pertinente: preferisci Customer Experience, Customer Care, Customer Operations, poi Direzione Commerciale/Marketing, infine CEO. Rispondi SOLO JSON: "
               '{"contatti":[{"Azienda":"...","Nome e cognome":"...","Ruolo":"...","Link di contatto":"https://..."}]}. '
               "EVIDENZE: " + json.dumps(evidence, ensure_ascii=False)[:28000])
     try:
@@ -333,7 +346,23 @@ def enrich_contacts_tavily(tables):
                 continue
             tables["contatti"].append({"Azienda":company,"Nome e cognome":name,
                                        "Ruolo":role,"Link di contatto":link})
-        return f"Contatti: {len(tables['contatti'])} nominativi con link supportati da fonti online."
+        # Un solo contatto per azienda, scelto per rilevanza commerciale CXI.
+        def contact_score(row):
+            role = str(row.get("Ruolo", "")).casefold()
+            weights = (("customer experience", 100), ("customer care", 95),
+                       ("customer operations", 95), ("contact center", 92),
+                       ("customer service", 90), ("clienti", 85),
+                       ("digital channels", 80), ("digital", 75),
+                       ("commercial", 72), ("vendite", 70),
+                       ("marketing", 65), ("ceo", 45), ("amministratore delegato", 45))
+            return max((weight for term, weight in weights if term in role), default=30)
+        best = {}
+        for contact in tables["contatti"]:
+            company = contact["Azienda"]
+            if company not in best or contact_score(contact) > contact_score(best[company]):
+                best[company] = contact
+        tables["contatti"] = [best[r["Azienda"]] for r in tables["new_names"] if r["Azienda"] in best]
+        return ""
     except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
         print(f"CONTATTI estrazione non disponibile: {type(exc).__name__}",flush=True)
         return "Contatti: estrazione temporaneamente non disponibile."
@@ -390,6 +419,7 @@ METODOLOGIA DI PRIORITIZZAZIONE — allineata agli Use Case CXI (13 ottobre 2026
 - Accessibilità: 3 = gruppo regionale/medio con struttura decisionale presumibilmente più raggiungibile, 2 = gruppo nazionale o struttura intermedia, 1 = grande gruppo complesso o con governance articolata. È una STIMA commerciale, non una certezza su contatti effettivi.
 - Volume: valuta il potenziale quantitativo nel SETTORE, non assegnare sempre 3 all'azienda più grande in assoluto. Per concessionarie auto: 3 se fatturato >1,5 miliardi €, 2 se 500 milioni–1,5 miliardi €, 1 se <500 milioni €. Per sanità privata: 3 se ricavi >1 miliardo €, 2 se 100 milioni–1 miliardo €, 1 se poco sopra 100 milioni €. Per energy retail: 3 = grandi multiutility con milioni di clienti, 2 = operatori medi con circa 0,5–1,5 milioni di clienti, 1 = operatori più piccoli. Negli altri settori definisci soglie coerenti con il caso e riportale nella sintesi.
 - Il codice, NON tu, calcola Totale = Cambiamento + Accessibilità + Volume e ordina le aziende. In caso di parità privilegia Cambiamento, poi Accessibilità. Punteggi sono valutazioni ragionate, non fatti verificati.
+- ATTENZIONE: non confondere la notorietà o il fatturato con la priorità commerciale. Cerca candidati diversificati, compresi operatori di media dimensione con cambiamenti recenti e decisori più accessibili. Non selezionare automaticamente i cinque operatori più grandi. Prima valuta il potenziale CXI e POI proponi la graduatoria. La selezione resta vincolata ai requisiti espliciti dell'utente: non inserire aziende che non li rispettano solo per imitare gli Use Case.
 - CALIBRAZIONE dagli esempi didattici CXI (non riprodurli meccanicamente, sono benchmark storici): energy: Magis 3/3/2, Dolomiti Energia 2/3/2, Sorgenia 2/2/2, A2A 2/1/3, Hera 1/1/3; auto: Intergea 3/2/3, Spazio Group 2/3/2, Autotorino 2/1/3, Gruppo Bossoni 1/3/1; sanità: Santagostino 3/3/1, CDI 2/3/2, Gruppo San Donato 3/1/3, Humanitas 2/1/3, IEO 2/2/2. I dati e le situazioni possono cambiare nel tempo.
 
 CATALOGO SERVIZI CXI (Company Profile CXI 2026 + Use Case):
@@ -404,6 +434,7 @@ REGOLE PER LE TABELLE:
 - 'new_names': restituisci solo aziende reali; il campo 'Fatturato' è OBBLIGATORIO quando esiste una fonte attendibile, con importo e anno, distinguendo il dato del gruppo da quello della società. Non usare 'Non verificato' per comodità, ma non inventare importi. Se manca una fonte ma conosci una cifra plausibile, indica esplicitamente 'Stima: X € (ANNO)'; non presentare mai una stima come dato verificato. Se non conosci alcun valore affidabile, scrivi 'Dato non disponibile'. Se la richiesta specifica clienti energia, ricavi, sedi, o altre soglie, riporta quei dati in 'Altri dati chiave'. 'Fonte' deve contenere URL autentici e pertinenti se conosciuti con sufficiente certezza, altrimenti 'Non verificato'.
 - OBBLIGATORIO: ogni elemento di new_names deve avere 'Azienda' non vuota. Se non sai identificare un'impresa reale, cerca un'altra impresa pertinente; non lasciare nomi vuoti, non inventare aziende.
 - Se trovi MENO aziende del numero richiesto, dichiaralo ESPLICITAMENTE nella 'sintesi': «Richieste N aziende; trovate solo M aziende che soddisfano i requisiti». Spiega brevemente il motivo o i requisiti che non sei riuscito a verificare. NON riempire con aziende fuori target e NON presentare l'elenco come completo.
+- Per selezionare i prospect confronta prima più candidati e privilegia quelli con potenziale CXI (Cambiamento + Accessibilità + Volume), non semplicemente i più noti. Il ranking finale è calcolato dal codice sui candidati inclusi.
 - La graduatoria deve essere consecutiva e riferita SOLO alle aziende effettivamente incluse. Non lasciare posizioni saltate (es. 1, 2, 4, 5).
 - 'priorita', 'informazioni', 'servizi_cxi': una riga per ogni azienda di 'new_names', senza aggiungere aziende estranee. 'informazioni' contiene fatti e indizi commerciali specifici, distinguendo ipotesi.
 - 'buyer_persona': 2–4 ruoli tipici del settore, con peso nella decisione, interesse e primo messaggio; non inserire nomi personali in questa tabella.
@@ -474,9 +505,10 @@ REGOLE PER LE TABELLE:
     contacts_note = enrich_contacts_tavily(tables)
     # Il conteggio reale viene sempre dal codice, non dalla sintesi generata.
     actual = len(tables["new_names"])
-    if expected is not None:
-        summary += f"\n\n**Aziende effettivamente incluse: {actual} su {expected} richieste.**"
-    return summary + "\n\n" + web_note + "\n\n" + revenue_note + "\n\n" + contacts_note, tables
+    # Le note tecniche restano nei log, non nel testo rivolto al cliente.
+    print(f"SALESPILOT | aziende={actual} richieste={expected} | {web_note} | {revenue_note} | {contacts_note}", flush=True)
+    summary = re.sub(r"(?im)^.*(?:aziende effettivamente incluse|ricerca tavily aziende|fatturati:|contatti:).*$(?:\n)?", "", summary).strip()
+    return summary, tables
 
 
 def requested_company_count(query):
