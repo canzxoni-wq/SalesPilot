@@ -128,7 +128,7 @@ def normalize_result(result):
                       ("contatti", SHEETS["4.1 Contatti"]),
                       ("servizi_cxi", SHEETS["5. Servizi CXI"])):
         existing = {r["Azienda"] for r in tables[key]}
-        for company in companies:
+        for company in unique_companies:
             if company not in existing:
                 tables[key].append({c: (company if c == "Azienda" else "Non verificato") for c in cols})
     # Ricalcola sempre il ranking dopo filtri e integrazioni: 1, 2, 3, ...
