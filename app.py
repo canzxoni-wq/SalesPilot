@@ -272,8 +272,15 @@ def enrich_revenue_tavily(tables):
             return "Fatturati: estrazione Gemini non disponibile."
         parts = response.json()["candidates"][0]["content"]["parts"]
         result = extract_json("\n".join(p.get("text", "") for p in parts))
+        if isinstance(result, list):
+            result = {"fatturati": result}
+        if not isinstance(result, dict):
+            result = {}
+        revenues = result.get("fatturati", [])
+        if not isinstance(revenues, list):
+            revenues = [revenues] if isinstance(revenues, dict) else []
         by_company = {str(r.get("Azienda", "")).strip().casefold(): r
-                      for r in result.get("fatturati", []) if isinstance(r, dict)}
+                      for r in revenues if isinstance(r, dict)}
         updated = 0
         for row in missing:
             company = str(row["Azienda"]).strip()
@@ -325,6 +332,11 @@ def enrich_revenue_tavily(tables):
                     print(f"FATTURATO SINGOLO {company}: HTTP {r2.status_code}", flush=True)
                     continue
                 parsed = extract_json("\n".join(part.get("text", "") for part in r2.json()["candidates"][0]["content"]["parts"]))
+                # Gemini puo restituire una lista anche quando chiediamo un singolo oggetto.
+                if isinstance(parsed, list):
+                    parsed = next((item for item in parsed if isinstance(item, dict)), {})
+                if not isinstance(parsed, dict):
+                    parsed = {}
                 val = str(parsed.get("Fatturato", "")).strip()
                 src = str(parsed.get("Fonte", "")).strip()
                 if (re.search(r"\b20\d{2}\b", val)
@@ -373,7 +385,16 @@ def enrich_contacts_tavily(tables):
         if not response.ok:
             return f"Contatti: estrazione non disponibile (HTTP {response.status_code})."
         data = extract_json("\n".join(p.get("text","") for p in response.json()["candidates"][0]["content"]["parts"]))
-        for row in data.get("contatti", []):
+        if isinstance(data, list):
+            data = {"contatti": data}
+        if not isinstance(data, dict):
+            data = {}
+        contacts = data.get("contatti", [])
+        if not isinstance(contacts, list):
+            contacts = [contacts] if isinstance(contacts, dict) else []
+        for row in contacts:
+            if not isinstance(row, dict):
+                continue
             company = row.get("Azienda", "")
             name = str(row.get("Nome e cognome", "")).strip()
             role = str(row.get("Ruolo", "")).strip()
