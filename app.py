@@ -568,6 +568,7 @@ REGOLE PER LE TABELLE:
         if str(row.get("Fatturato", "")).strip().casefold() in ("", "non verificato", "non individuato", "n/d"):
             row["Fatturato"] = "Dato non disponibile"
     contacts_note = enrich_contacts_tavily(tables)
+    enrich_company_addresses(tables)
     # Il conteggio reale viene sempre dal codice, non dalla sintesi generata.
     actual = len(tables["new_names"])
     # Le note tecniche restano nei log, non nel testo rivolto al cliente.
@@ -630,31 +631,117 @@ def excel_bytes(tables):
 
 
 
-def show_company_maps(tables):
-    """Google Maps embed tramite ricerca per azienda + città; nessuna nuova API key.
+def enrich_company_addresses(tables):
+    """Cerca la sede legale, massimo una ricerca Tavily Basic per azienda.
 
-    La posizione è un risultato di ricerca Google Maps, NON una sede verificata.
+    Eseguita SOLO quando nasce una nuova ricerca, mai durante il rendering
+    o quando si riapre una ricerca dalla cronologia.
     """
+    tables["map_addresses"] = {}
+    if not TAVILY_API_KEY or not API_KEY:
+        return
+    evidence = {}
+    for row in tables.get("new_names", []):
+        company = str(row.get("Azienda", "")).strip()
+        city = str(row.get("Sede", "")).strip()
+        if not company:
+            continue
+        sources, _ = tavily_search(
+            f'"{company}" sede legale indirizzo via numero civico {city} sito ufficiale',
+            max_results=4,
+        )
+        if sources:
+            evidence[company] = {"citta": city, "fonti": sources}
+    if not evidence:
+        return
+    prompt = (
+        "Sei un estrattore rigoroso di sedi legali di società italiane. "
+        "Dalle fonti qui sotto individua per ogni azienda SOLO l'indirizzo "
+        "della sede legale o sede centrale ufficiale, con via/piazza, numero civico e città. "
+        "Non scegliere filiali, negozi, punti vendita o sedi di altre società del gruppo. "
+        "Se le fonti non permettono di identificare una sola sede certa, ometti l'azienda. "
+        "Restituisci SOLO JSON {\"sedi\":[{\"Azienda\":\"...\",\"Indirizzo\":\"...\",\"Fonte\":\"URL esatto\"}]}. "
+        "Non inventare indirizzi né URL. EVIDENZE: "
+        + json.dumps(evidence, ensure_ascii=False)[:37000]
+    )
+    try:
+        response = requests.post(
+            f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent",
+            params={"key": API_KEY},
+            json={"contents": [{"parts": [{"text": prompt}]}],
+                  "generationConfig": {"temperature": 0, "responseMimeType": "application/json"}},
+            timeout=75,
+        )
+        if not response.ok:
+            print(f"MAPPE estrazione indirizzi HTTP {response.status_code}", flush=True)
+            return
+        raw = "\n".join(part.get("text", "") for part in
+                        response.json()["candidates"][0]["content"]["parts"])
+        data = extract_json(raw)
+        if isinstance(data, list):
+            data = {"sedi": data}
+        if not isinstance(data, dict):
+            return
+        for item in data.get("sedi", []):
+            if not isinstance(item, dict):
+                continue
+            company = str(item.get("Azienda", "")).strip()
+            address = str(item.get("Indirizzo", "")).strip()
+            source = str(item.get("Fonte", "")).strip()
+            if company not in evidence or not address or len(address) > 220:
+                continue
+            # Accetta solo una fonte realmente restituita da Tavily.
+            matched = next((r for r in evidence[company]["fonti"] if r["url"] == source), None)
+            if not matched:
+                continue
+            # Richiedi un civico e una corrispondenza testuale con l'estratto.
+            if not re.search(r"\b\d{1,4}(?:[/-][A-Za-z0-9]+)?\b", address):
+                continue
+            content = (matched.get("estratto", "") + " " + matched.get("titolo", "")).casefold()
+            # Almeno la parte stradale deve comparire nella fonte; altrimenti
+            # non possiamo distinguere un indirizzo dedotto da uno documentato.
+            road = re.split(r",", address, maxsplit=1)[0].strip().casefold()
+            if len(road) < 7 or road not in content:
+                continue
+            tables["map_addresses"][company] = {"indirizzo": address, "fonte": source}
+        print(f"MAPPE sedi legali supportate={len(tables['map_addresses'])}", flush=True)
+    except (requests.RequestException, ValueError, KeyError, IndexError, TypeError) as exc:
+        print(f"MAPPE estrazione non disponibile: {type(exc).__name__}", flush=True)
+
+
+def show_company_maps(tables):
+    """Una sola posizione per azienda: sede verificata oppure centro città."""
     companies = tables.get("new_names", [])
     if not companies:
         return
     st.subheader("6. Sedi aziendali e Google Maps")
-    st.caption("Le mappe cercano l'azienda nella città indicata. Il segnaposto non certifica l'indirizzo della sede legale.")
+    st.caption("La mappa mostra la sede legale quando l'indirizzo è supportato da una fonte. Altrimenti mostra soltanto la città, senza indicare una sede aziendale precisa.")
+    addresses = tables.get("map_addresses", {})
     for row in companies:
         company = str(row.get("Azienda", "")).strip()
         city = str(row.get("Sede", "")).strip()
         if not company:
             continue
+        location = addresses.get(company, {})
+        address = str(location.get("indirizzo", "")).strip()
+        source = str(location.get("fonte", "")).strip()
         usable_city = city if city.casefold() not in ("", "non verificato", "non individuato", "dato non disponibile") else "Italia"
-        query = f"{company} {usable_city}"
+        # Mai cercare il nome dell'azienda nella mappa: Google mostrerebbe
+        # tutte le filiali. Con indirizzo esatto oppure città, una sola area.
+        query = address if address else f"{usable_city}, Italia"
         encoded = quote(query, safe="")
         maps_url = f"https://www.google.com/maps/search/?api=1&query={encoded}"
         embed_url = f"https://maps.google.com/maps?q={encoded}&output=embed"
         left, right = st.columns([1, 1.4], gap="large")
         with left:
             st.markdown(f"#### {html.escape(company)}")
-            st.markdown(f"**Località indicata:** {html.escape(usable_city)}")
-            st.caption("Indirizzo civico non verificato: apri Google Maps per consultare le sedi disponibili.")
+            if address:
+                st.markdown(f"**Sede legale:** {html.escape(address)}")
+                if source:
+                    st.markdown(f"[Fonte dell'indirizzo]({source})")
+            else:
+                st.markdown(f"**Città:** {html.escape(usable_city)}")
+                st.caption("Indirizzo della sede legale non verificato. La mappa mostra la città, non la sede dell'azienda.")
             st.link_button("📍 Apri in Google Maps", maps_url)
         with right:
             st.components.v1.iframe(embed_url, height=265, scrolling=False)
