@@ -1,4 +1,5 @@
 import io
+import time
 import json
 import os
 import re
@@ -785,8 +786,49 @@ def show_dashboard(tables):
     st.caption("Dashboard calcolata dai risultati già disponibili: nessun credito Tavily aggiuntivo. I fatturati di società e gruppi non vengono sommati.")
 
 
+def format_duration(seconds):
+    """Durata effettiva della ricerca, comprese le chiamate alle API."""
+    seconds = max(0, round(float(seconds)))
+    minutes, remainder = divmod(seconds, 60)
+    if minutes:
+        return f"{minutes} min {remainder} sec" if remainder else f"{minutes} min"
+    return f"{remainder} sec"
+
+
+def show_feedback(item):
+    """Valutazioni per singola ricerca, salvate nella cronologia della sessione."""
+    st.divider()
+    st.subheader("⭐ Valuta questa ricerca")
+    st.caption("Da 1 stella (scarso) a 5 stelle (ottimo). Il feedback non avvia nuove ricerche.")
+    criteria = (
+        ("aziende", "Aziende trovate: quanto sono pertinenti?"),
+        ("dati", "Qualità dei dati: quanto sono completi e affidabili?"),
+        ("utilita", "Utilità commerciale: quanto sono utili priorità e suggerimenti?"),
+    )
+    existing = item.get("feedback")
+    if existing:
+        st.success("Feedback salvato per questa ricerca. Puoi aggiornarlo qui sotto.")
+    ratings = {}
+    for key, label in criteria:
+        st.markdown(f"**{label}**")
+        widget_key = f"feedback_{item['id']}_{key}"
+        if existing and widget_key not in st.session_state:
+            st.session_state[widget_key] = int(existing[key]) - 1
+        selection = st.feedback("stars", key=widget_key)
+        ratings[key] = selection + 1 if selection is not None else None
+    if st.button("💾 Invia feedback", key=f"save_feedback_{item['id']}"):
+        if any(value is None for value in ratings.values()):
+            st.warning("Seleziona da 1 a 5 stelle per tutti e tre i criteri.")
+        else:
+            item["feedback"] = ratings
+            item["feedback_at"] = datetime.now().strftime("%d/%m/%Y %H:%M")
+            st.success("Grazie! Feedback registrato nella cronologia di questa sessione.")
+
+
 def show_result(item):
     st.caption(f"Ricerca del {item['date']} · {item['mode']}")
+    if "duration_seconds" in item:
+        st.caption(f"⏱️ SalesPilot ha risposto in {format_duration(item['duration_seconds'])}")
     st.markdown(f"**Richiesta:** {item['query']}")
     if item.get("error"):
         st.error(item["error"])
@@ -846,6 +888,7 @@ query = st.chat_input("Es. Trova 5 gruppi di concessionarie auto in Piemonte o L
 if query and query.strip():
     uid = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
     item = {"id": uid, "date": datetime.now().strftime("%d/%m/%Y %H:%M"), "query": query.strip(), "mode": mode}
+    started_at = time.perf_counter()
     try:
         if mode.startswith("Demo"):
             item["summary"], item["tables"] = demo_results()
@@ -854,6 +897,8 @@ if query and query.strip():
                 item["summary"], item["tables"] = gemini_results(query.strip())
     except Exception as exc:
         item["error"] = f"Ricerca non completata: {exc}"
+    finally:
+        item["duration_seconds"] = time.perf_counter() - started_at
     st.session_state.history.append(item)
     st.session_state.history = st.session_state.history[-MAX_HISTORY:]
     st.session_state.selected_id = uid
