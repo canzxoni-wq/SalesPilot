@@ -22,7 +22,9 @@ PASSWORD = os.getenv("SALESPILOT_PASSWORD") or os.getenv("CXI_PASSWORD", "")
 API_KEY = os.getenv("GEMINI_API_KEY", "")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
-MAX_HISTORY = 10
+MAX_HISTORY = 20
+SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
+SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
 
 SHEETS = {
     "1. New Names": ["Azienda", "Sede", "Fatturato", "Altri dati chiave", "Fonte"],
@@ -57,6 +59,63 @@ if "history" not in st.session_state:
     st.session_state.history = []
 if "selected_id" not in st.session_state:
     st.session_state.selected_id = None
+
+
+def db_enabled():
+    return bool(SUPABASE_URL and SUPABASE_KEY)
+
+
+def db_request(method, resource, payload=None, params=None, extra_headers=None):
+    """Accesso al database dal solo server Render. Mai esporre la chiave al browser."""
+    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+               "Content-Type": "application/json"}
+    if extra_headers:
+        headers.update(extra_headers)
+    response = requests.request(method, f"{SUPABASE_URL}/rest/v1/{resource}",
+                                headers=headers, json=payload, params=params, timeout=15)
+    response.raise_for_status()
+    return response.json() if response.content else []
+
+
+def load_history():
+    rows = db_request("GET", "salespilot_searches", params={
+        "select": "id,payload", "order": "created_at.desc", "limit": MAX_HISTORY})
+    return [r["payload"] for r in reversed(rows) if isinstance(r.get("payload"), dict)]
+
+
+def save_search(item):
+    db_request("POST", "salespilot_searches", payload={"id": item["id"], "payload": item},
+               extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
+    # Mantiene nel database soltanto le 20 ricerche più recenti.
+    old = db_request("GET", "salespilot_searches", params={
+        "select": "id", "order": "created_at.desc", "offset": MAX_HISTORY, "limit": 1000})
+    if old:
+        ids = ",".join('"' + str(row["id"]).replace('"', '') + '"' for row in old)
+        db_request("DELETE", "salespilot_searches", params={"id": f"in.({ids})"})
+
+
+def save_feedback(item):
+    db_request("PATCH", "salespilot_searches", payload={"payload": item},
+               params={"id": f"eq.{item['id']}"},
+               extra_headers={"Prefer": "return=minimal"})
+
+
+def clear_history_db():
+    db_request("DELETE", "salespilot_searches", params={"id": "neq.__never__"})
+
+
+def feedback_stats():
+    rows = db_request("GET", "salespilot_feedback_stats", params={"select": "*"})
+    return rows[0] if rows else None
+
+
+if db_enabled() and not st.session_state.get("db_history_loaded", False):
+    try:
+        st.session_state.history = load_history()
+        st.session_state.db_history_loaded = True
+    except requests.RequestException as exc:
+        print(f"DATABASE caricamento non disponibile: {type(exc).__name__}", flush=True)
+        st.warning("Archivio temporaneamente non disponibile: la cronologia di questa sessione resta utilizzabile.")
 
 
 def clean_rows(value, columns):
@@ -905,7 +964,7 @@ def format_duration(seconds):
 
 
 def show_feedback(item):
-    """Valutazioni per singola ricerca, salvate nella cronologia della sessione."""
+    """Valutazioni per singola ricerca, salvate nel database se configurato."""
     st.divider()
     st.subheader("⭐ Valuta questa ricerca")
     st.caption("Da 1 stella (scarso) a 5 stelle (ottimo).")
@@ -931,7 +990,15 @@ def show_feedback(item):
         else:
             item["feedback"] = ratings
             item["feedback_at"] = datetime.now().strftime("%d/%m/%Y %H:%M")
-            st.success("Grazie! Feedback registrato nella cronologia di questa sessione.")
+            if db_enabled():
+                try:
+                    save_feedback(item)
+                    st.success("Grazie! Feedback salvato.")
+                except requests.RequestException as exc:
+                    print(f"DATABASE feedback non salvato: {type(exc).__name__}", flush=True)
+                    st.error("Feedback non salvato nell'archivio. Riprova più tardi.")
+            else:
+                st.success("Feedback registrato per questa sessione.")
 
 
 def show_result(item):
@@ -970,13 +1037,19 @@ with st.sidebar:
         st.rerun()
     st.divider()
     st.subheader("Cronologia ricerche")
-    st.caption(f"Ultime {MAX_HISTORY} ricerche della sessione")
+    st.caption(f"Ultime {MAX_HISTORY} ricerche" + (" salvate" if db_enabled() else " della sessione"))
     for item in reversed(st.session_state.history):
         label = f"{item['date']} · {item['query'][:38]}"
         if st.button(label, key=f"history_{item['id']}", width="stretch"):
             st.session_state.selected_id = item["id"]
             st.rerun()
     if st.session_state.history and st.button("🗑️ Cancella cronologia", width="stretch"):
+        if db_enabled():
+            try:
+                clear_history_db()
+            except requests.RequestException:
+                st.error("Impossibile cancellare l'archivio. Riprova.")
+                st.stop()
         st.session_state.history = []
         st.session_state.selected_id = None
         st.rerun()
@@ -988,6 +1061,16 @@ with st.sidebar:
 st.title("SalesPilot")
 st.caption("Ricerca prospect B2B · prioritizzazione · suggerimenti commerciali")
 st.info("Prototipo universitario: verifica aziende, fatturati, contatti e fonti prima dell'uso commerciale.")
+if db_enabled():
+    try:
+        stats = feedback_stats()
+        if stats and int(stats.get("numero_feedback") or 0):
+            st.caption(f"⭐ Feedback medi · Aziende: {float(stats['media_aziende']):.1f}/5 · "
+                       f"Dati: {float(stats['media_dati']):.1f}/5 · "
+                       f"Utilità commerciale: {float(stats['media_utilita']):.1f}/5 "
+                       f"({int(stats['numero_feedback'])} valutazioni)")
+    except (requests.RequestException, TypeError, ValueError, KeyError) as exc:
+        print(f"DATABASE statistiche non disponibili: {type(exc).__name__}", flush=True)
 
 selected = next((x for x in st.session_state.history if x["id"] == st.session_state.selected_id), None)
 if selected:
@@ -1016,4 +1099,10 @@ if query and query.strip():
     st.session_state.history.append(item)
     st.session_state.history = st.session_state.history[-MAX_HISTORY:]
     st.session_state.selected_id = uid
+    if db_enabled():
+        try:
+            save_search(item)
+        except requests.RequestException as exc:
+            print(f"DATABASE ricerca non salvata: {type(exc).__name__}", flush=True)
+            st.warning("Ricerca completata, ma non salvata nell'archivio permanente.")
     st.rerun()
