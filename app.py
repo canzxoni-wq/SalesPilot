@@ -850,6 +850,7 @@ def show_result(item):
                        file_name=f"salespilot_ricerca_{item['id']}.xlsx",
                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                        key=f"export_{item['id']}")
+    show_feedback(item)
 
 with st.sidebar:
     st.header("SalesPilot · Beta")
