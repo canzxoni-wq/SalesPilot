@@ -716,7 +716,7 @@ def show_company_maps(tables):
     if not companies:
         return
     st.subheader("6. Sedi aziendali e Google Maps")
-    st.caption("Con sede legale verificata: posizione specifica. Altrimenti: ricerca generica dell’azienda nella città, che può mostrare più sedi e punti vendita.")
+    st.caption("Quando disponibile, la mappa mostra la sede legale dell’azienda. Se l’indirizzo non è verificabile, mostra i risultati di Google Maps per il nome dell’azienda e la località, che possono includere più sedi e punti vendita.")
     addresses = tables.get("map_addresses", {})
     for row in companies:
         company = str(row.get("Azienda", "")).strip()
@@ -799,7 +799,7 @@ def show_feedback(item):
     """Valutazioni per singola ricerca, salvate nella cronologia della sessione."""
     st.divider()
     st.subheader("⭐ Valuta questa ricerca")
-    st.caption("Da 1 stella (scarso) a 5 stelle (ottimo). Il feedback non avvia nuove ricerche.")
+    st.caption("Da 1 stella (scarso) a 5 stelle (ottimo).")
     criteria = (
         ("aziende", "Aziende trovate: quanto sono pertinenti?"),
         ("dati", "Qualità dei dati: quanto sono completi e affidabili?"),
@@ -834,7 +834,7 @@ def show_result(item):
         st.error(item["error"])
         return
     st.markdown(item.get("summary", ""))
-    notice = completeness_message(item["query"], item["tables"], demo=item["mode"].startswith("Demo"))
+    notice = completeness_message(item["query"], item["tables"])
     if notice:
         st.warning(notice)
     for idx, ((_, columns), key, title) in enumerate(zip(SHEETS.items(), KEYS, TITLES), 1):
@@ -856,7 +856,6 @@ def show_result(item):
 
 with st.sidebar:
     st.header("SalesPilot · Beta")
-    mode = st.radio("Modalità", ["Demo (senza API)", "Gemini (API)"], index=1)
     if st.button("➕ Nuova ricerca", width="stretch"):
         st.session_state.selected_id = None
         st.rerun()
@@ -890,14 +889,11 @@ else:
 query = st.chat_input("Es. Trova 5 gruppi di concessionarie auto in Piemonte o Lombardia con fatturato >300 milioni...")
 if query and query.strip():
     uid = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
-    item = {"id": uid, "date": datetime.now().strftime("%d/%m/%Y %H:%M"), "query": query.strip(), "mode": mode}
+    item = {"id": uid, "date": datetime.now().strftime("%d/%m/%Y %H:%M"), "query": query.strip(), "mode": "Gemini (API)"}
     started_at = time.perf_counter()
     try:
-        if mode.startswith("Demo"):
-            item["summary"], item["tables"] = demo_results()
-        else:
-            with st.spinner("Gemini sta elaborando la ricerca..."):
-                item["summary"], item["tables"] = gemini_results(query.strip())
+        with st.spinner("Gemini sta elaborando la ricerca..."):
+            item["summary"], item["tables"] = gemini_results(query.strip())
     except Exception as exc:
         item["error"] = f"Ricerca non completata: {exc}"
     finally:
