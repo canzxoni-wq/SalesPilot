@@ -893,7 +893,6 @@ def show_dashboard(tables):
         st.markdown("**Punteggio commerciale CXI (massimo 9)**")
         chart_df = pd.DataFrame(chart_rows).set_index("Azienda")
         st.bar_chart(chart_df, horizontal=True, x_label="Punteggio", y_label="Azienda")
-    st.caption("Dashboard calcolata dai risultati già disponibili: nessun credito Tavily aggiuntivo. I fatturati di società e gruppi non vengono sommati.")
 
 
 def format_duration(seconds):
@@ -952,15 +951,6 @@ def show_result(item):
         st.subheader(f"{number}. {title}")
         df = pd.DataFrame(item["tables"].get(key, [])).reindex(columns=columns, fill_value="")
         st.dataframe(df, width="stretch", hide_index=True)
-        if key == "priorita" and item["tables"].get("score_details"):
-            with st.expander("ⓘ Come sono stati attribuiti i punteggi?"):
-                st.caption("Punteggi da 1 a 3 basati sui dati già raccolti. I valori neutri/provvisori non sono verifiche. Nessuna ricerca Tavily aggiuntiva.")
-                for priority in item["tables"]["priorita"]:
-                    name = priority["Azienda"]
-                    detail = item["tables"]["score_details"].get(name, {})
-                    st.markdown(f"**{name} — {priority['Totale']}/9**")
-                    for criterion in ("Cambiamento", "Accessibilità", "Volume"):
-                        st.caption(f"{criterion}: {priority[criterion]}/3 — {detail.get(criterion, 'Motivazione non disponibile')}")
         if key == "contatti":
             st.caption("🔒 Privacy: i contatti indicati provengono da fonti professionali pubbliche. Sono riportati solo nome, ruolo e link pertinenti alla ricerca B2B. Prima di utilizzarli per finalità commerciali, verificare la base giuridica e gli obblighi privacy applicabili.")
         if df.empty:
