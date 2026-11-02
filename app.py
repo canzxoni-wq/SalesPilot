@@ -842,6 +842,8 @@ def show_result(item):
         st.subheader(f"{number}. {title}")
         df = pd.DataFrame(item["tables"].get(key, [])).reindex(columns=columns, fill_value="")
         st.dataframe(df, width="stretch", hide_index=True)
+        if key == "contatti":
+            st.caption("🔒 Privacy: i contatti indicati provengono da fonti professionali pubbliche. Sono riportati solo nome, ruolo e link pertinenti alla ricerca B2B. Prima di utilizzarli per finalità commerciali, verificare la base giuridica e gli obblighi privacy applicabili.")
         if df.empty:
             st.caption("Nessun dato verificabile disponibile per questa sezione.")
     show_dashboard(item["tables"])
