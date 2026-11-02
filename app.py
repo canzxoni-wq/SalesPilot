@@ -434,6 +434,115 @@ def enrich_contacts_tavily(tables):
         return "Contatti: estrazione temporaneamente non disponibile."
 
 
+def _money_millions(value):
+    """Interpreta importi testuali in euro, evitando di leggere l'anno come importo."""
+    value = str(value or "").lower().replace("\u00a0", " ")
+    if not any(x in value for x in ("€", "euro", "eur", "milion", "miliard", "mln", "mld")):
+        return None
+    if any(x in value for x in ("non disponibile", "non verificato", "non individuato")):
+        return None
+    match = re.search(r"(\d{1,3}(?:[. ]\d{3})+(?:,\d+)?|\d+(?:[,.]\d+)?)\s*(miliardi?|mld|mili[o]?ni?|mln|mil\b|€|euro|eur)", value)
+    if not match:
+        return None
+    raw, unit = match.groups()
+    if unit in ("€", "euro", "eur"):
+        number = float(raw.replace(".", "").replace(" ", "").replace(",", "."))
+        return number / 1_000_000
+    if "." in raw and "," not in raw and len(raw.split(".")[-1]) == 3:
+        number = float(raw.replace(".", ""))
+    else:
+        number = float(raw.replace(".", "").replace(",", "."))
+    return number * (1000 if unit.startswith(("miliard", "mld")) else 1)
+
+
+def _customer_count(value):
+    text = str(value or "").lower()
+    match = re.search(r"(\d+(?:[.,]\d+)?)\s*(milioni|milione|mln|mila|\.?000)?\s*(?:di\s+)?(?:clienti|utenze|contratti|punti di fornitura)", text)
+    if not match:
+        return None
+    raw, unit = match.groups()
+    n = float(raw.replace(",", "."))
+    if unit in ("milioni", "milione", "mln"):
+        return n * 1_000_000
+    if unit in ("mila", ".000"):
+        return n * 1000
+    return n
+
+
+def score_companies(tables, query):
+    """Scoring locale su informazioni gia estratte: zero richieste Tavily/Gemini."""
+    q = query.casefold()
+    sector = ("auto" if any(w in q for w in ("concessionar", "automotive", "autoveicol", "multimarca"))
+              else "health" if any(w in q for w in ("sanit", "ospedal", "poliambulator", "clinich", "diagnostic"))
+              else "energy" if any(w in q for w in ("energia", "luce e gas", "energy retail", "multiutility", "gas e luce"))
+              else "other")
+    infos = {r.get("Azienda"): str(r.get("Cosa sapere", "")) for r in tables.get("informazioni", [])}
+    services = {r.get("Azienda"): str(r.get("Aggancio al fatto", "")) for r in tables.get("servizi_cxi", [])}
+    priorities = {r.get("Azienda"): r for r in tables.get("priorita", [])}
+    scored = []
+    details = {}
+    for company in tables.get("new_names", []):
+        name = company["Azienda"]
+        row = priorities.get(name, {"Azienda": name, "Cluster": "Da qualificare"})
+        facts = " ".join((str(company.get("Altri dati chiave", "")), infos.get(name, ""), services.get(name, "")))
+        text = facts.casefold()
+        # Non considerare il nome azienda o la richiesta come prova di un cambiamento.
+        big = ("acquisizion", "acquisit", "fusione", "incorporazion", "rebranding", "riorganizzazion", "nuove sedi", "nuove aperture", "espansion", "integrazione")
+        medium = ("crescita", "investiment", "digitalizzazion", "nuovi servizi", "nuovi punti", "nuova piattaforma", "ampliamento", "sviluppo")
+        recent_years = {str(datetime.now().year - i) for i in range(3)}
+        recent = any(y in text for y in recent_years)
+        if any(k in text for k in big) and recent:
+            change, why_change = 3, "Trasformazione aziendale con riferimento temporale recente nei dati raccolti."
+        elif any(k in text for k in big + medium):
+            change, why_change = 2, "Segnali di evoluzione aziendale; recente trasformazione rilevante non sufficientemente documentata."
+        else:
+            change, why_change = 1, "Nessun cambiamento significativo documentato nei dati raccolti (non significa assenza di cambiamenti)."
+        # Accessibilita: solo proxy di complessita organizzativa, non disponibilita di contatti.
+        footprint = " ".join((str(company.get("Sede", "")), facts)).casefold()
+        complex_terms = ("internazional", "multinazional", "quotat", "globale", "presenza in oltre 10", "oltre 100 sedi")
+        national_terms = ("nazional", "multiregional", "diverse regioni", "più regioni", "piu regioni", "gruppo nazionale")
+        regional_terms = ("regionale", "locale", "territoriale", "provinciale", "piemonte", "lombardia")
+        if any(x in footprint for x in complex_terms):
+            access, why_access = 1, "Struttura presumibilmente complessa, sulla base della presenza/organizzazione descritta."
+        elif any(x in footprint for x in national_terms):
+            access, why_access = 2, "Presenza nazionale o multiregionale: accessibilità commerciale stimata intermedia."
+        elif any(x in footprint for x in regional_terms) and not any(x in footprint for x in national_terms):
+            access, why_access = 3, "Presenza prevalentemente territoriale nei dati disponibili; accessibilità stimata alta."
+        else:
+            access, why_access = 2, "Struttura decisionale non sufficientemente documentata: valore neutro provvisorio."
+        revenue = _money_millions(company.get("Fatturato", ""))
+        if sector == "auto" and revenue is not None:
+            volume = 3 if revenue > 1500 else 2 if revenue >= 500 else 1
+            why_volume = f"Fatturato indicato: circa {revenue:g} milioni €; soglie automotive: 500 / 1.500 milioni €."
+        elif sector == "health" and revenue is not None:
+            volume = 3 if revenue > 1000 else 2 if revenue >= 100 else 1
+            why_volume = f"Fatturato indicato: circa {revenue:g} milioni €; soglie sanità: 100 / 1.000 milioni €."
+        elif sector == "energy":
+            customers = _customer_count(facts)
+            if customers is not None:
+                volume = 3 if customers > 1_500_000 else 2 if customers >= 500_000 else 1
+                why_volume = f"Clienti indicati: circa {customers:,.0f}; soglie energy: 500.000 / 1.500.000 clienti."
+            else:
+                volume, why_volume = 2, "Numero clienti non ricavabile dai dati: valore neutro provvisorio."
+        elif sector == "other" and revenue is not None:
+            # Per settori non calibrati, non inventare soglie settoriali.
+            volume, why_volume = 2, "Settore senza soglie CXI definite: valore neutro provvisorio; fatturato disponibile per valutazione manuale."
+        else:
+            volume, why_volume = 2, "Indicatore quantitativo non disponibile: valore neutro provvisorio."
+        row.update({"Cambiamento": change, "Accessibilità": access, "Volume": volume,
+                    "Totale": change + access + volume})
+        scored.append(row)
+        details[name] = {"Cambiamento": why_change, "Accessibilità": why_access, "Volume": why_volume}
+    scored.sort(key=lambda r: (r["Totale"], r["Cambiamento"], r["Accessibilità"]), reverse=True)
+    for i, row in enumerate(scored, 1):
+        row["Priorità"] = i
+    tables["priorita"] = scored
+    tables["score_details"] = details
+    ranks = {r["Azienda"]: r["Priorità"] for r in scored}
+    tables["new_names"].sort(key=lambda r: ranks.get(r["Azienda"], 999))
+    return tables
+
+
 def gemini_results(query):
     if not API_KEY:
         raise ValueError("Manca GEMINI_API_KEY nelle variabili d'ambiente di Render")
@@ -570,6 +679,7 @@ REGOLE PER LE TABELLE:
             row["Fatturato"] = "Dato non disponibile"
     contacts_note = enrich_contacts_tavily(tables)
     enrich_company_addresses(tables)
+    score_companies(tables, query)
     # Il conteggio reale viene sempre dal codice, non dalla sintesi generata.
     actual = len(tables["new_names"])
     # Le note tecniche restano nei log, non nel testo rivolto al cliente.
@@ -828,7 +938,7 @@ def show_feedback(item):
 def show_result(item):
     st.caption(f"Ricerca del {item['date']} · {item['mode']}")
     if "duration_seconds" in item:
-        st.caption(f"⏱️ SalesPilot ha risposto in {format_duration(item['duration_seconds'])}")
+        st.caption(f"⏱️ {'Tentativo terminato' if item.get('error') else 'SalesPilot ha risposto'} in {format_duration(item['duration_seconds'])}")
     st.markdown(f"**Richiesta:** {item['query']}")
     if item.get("error"):
         st.error(item["error"])
@@ -842,6 +952,15 @@ def show_result(item):
         st.subheader(f"{number}. {title}")
         df = pd.DataFrame(item["tables"].get(key, [])).reindex(columns=columns, fill_value="")
         st.dataframe(df, width="stretch", hide_index=True)
+        if key == "priorita" and item["tables"].get("score_details"):
+            with st.expander("ⓘ Come sono stati attribuiti i punteggi?"):
+                st.caption("Punteggi da 1 a 3 basati sui dati già raccolti. I valori neutri/provvisori non sono verifiche. Nessuna ricerca Tavily aggiuntiva.")
+                for priority in item["tables"]["priorita"]:
+                    name = priority["Azienda"]
+                    detail = item["tables"]["score_details"].get(name, {})
+                    st.markdown(f"**{name} — {priority['Totale']}/9**")
+                    for criterion in ("Cambiamento", "Accessibilità", "Volume"):
+                        st.caption(f"{criterion}: {priority[criterion]}/3 — {detail.get(criterion, 'Motivazione non disponibile')}")
         if key == "contatti":
             st.caption("🔒 Privacy: i contatti indicati provengono da fonti professionali pubbliche. Sono riportati solo nome, ruolo e link pertinenti alla ricerca B2B. Prima di utilizzarli per finalità commerciali, verificare la base giuridica e gli obblighi privacy applicabili.")
         if df.empty:
@@ -895,7 +1014,13 @@ if query and query.strip():
         with st.spinner("Gemini sta elaborando la ricerca..."):
             item["summary"], item["tables"] = gemini_results(query.strip())
     except Exception as exc:
-        item["error"] = f"Ricerca non completata: {exc}"
+        error_text = str(exc)
+        if re.search(r"(?:HTTP\s*)?(?:503|502|504)\b", error_text):
+            item["error"] = "Sistema temporaneamente sovraccarico. Riprova tra qualche minuto."
+        elif re.search(r"(?:HTTP\s*)?429\b", error_text):
+            item["error"] = "Servizio temporaneamente occupato o limite di richieste raggiunto. Riprova tra qualche minuto."
+        else:
+            item["error"] = f"Ricerca non completata: {exc}"
     finally:
         item["duration_seconds"] = time.perf_counter() - started_at
     st.session_state.history.append(item)
