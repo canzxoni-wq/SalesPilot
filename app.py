@@ -710,12 +710,12 @@ def enrich_company_addresses(tables):
 
 
 def show_company_maps(tables):
-    """Una sola posizione per azienda: sede verificata oppure centro città."""
+    """Sede verificata quando disponibile; altrimenti ricerca aziendale generica."""
     companies = tables.get("new_names", [])
     if not companies:
         return
     st.subheader("6. Sedi aziendali e Google Maps")
-    st.caption("La mappa mostra la sede legale quando l'indirizzo è supportato da una fonte. Altrimenti mostra soltanto la città, senza indicare una sede aziendale precisa.")
+    st.caption("Con sede legale verificata: posizione specifica. Altrimenti: ricerca generica dell’azienda nella città, che può mostrare più sedi e punti vendita.")
     addresses = tables.get("map_addresses", {})
     for row in companies:
         company = str(row.get("Azienda", "")).strip()
@@ -726,9 +726,9 @@ def show_company_maps(tables):
         address = str(location.get("indirizzo", "")).strip()
         source = str(location.get("fonte", "")).strip()
         usable_city = city if city.casefold() not in ("", "non verificato", "non individuato", "dato non disponibile") else "Italia"
-        # Mai cercare il nome dell'azienda nella mappa: Google mostrerebbe
-        # tutte le filiali. Con indirizzo esatto oppure città, una sola area.
-        query = address if address else f"{usable_city}, Italia"
+        # Fallback richiesto: senza indirizzo verificato, mostra tutte le sedi
+        # trovate da Google Maps cercando nome azienda + città.
+        query = address if address else f"{company} {usable_city} Italia"
         encoded = quote(query, safe="")
         maps_url = f"https://www.google.com/maps/search/?api=1&query={encoded}"
         embed_url = f"https://maps.google.com/maps?q={encoded}&output=embed"
@@ -741,11 +741,49 @@ def show_company_maps(tables):
                     st.markdown(f"[Fonte dell'indirizzo]({source})")
             else:
                 st.markdown(f"**Città:** {html.escape(usable_city)}")
-                st.caption("Indirizzo della sede legale non verificato. La mappa mostra la città, non la sede dell'azienda.")
+                st.caption("Sede legale non verificata: Google Maps mostra i risultati per nome azienda e città (anche più sedi).")
             st.link_button("📍 Apri in Google Maps", maps_url)
         with right:
             st.components.v1.iframe(embed_url, height=265, scrolling=False)
         st.divider()
+
+def show_dashboard(tables):
+    """Indicatori e grafici locali: nessuna richiesta Gemini o Tavily."""
+    companies = tables.get("new_names", [])
+    if not companies:
+        return
+    priority_rows = tables.get("priorita", [])
+    contacts = tables.get("contatti", [])
+    valid_revenues = sum(
+        bool(re.search(r"\d", str(r.get("Fatturato", ""))))
+        and str(r.get("Fatturato", "")).strip().casefold()
+        not in ("dato non disponibile", "non verificato")
+        for r in companies
+    )
+    high_priority = sum(
+        isinstance(r.get("Totale"), (int, float)) and r["Totale"] >= 7
+        for r in priority_rows
+    )
+    cities = {str(r.get("Sede", "")).strip() for r in companies}
+    cities -= {"", "Non verificato", "Dato non disponibile", "Non individuato"}
+    st.subheader("📊 Dashboard commerciale")
+    a, b, c, d, e = st.columns(5)
+    a.metric("Aziende", len(companies))
+    b.metric("Priorità alta (7–9)", high_priority)
+    c.metric("Fatturati disponibili", f"{valid_revenues}/{len(companies)}")
+    d.metric("Contatti suggeriti", len({r.get("Azienda") for r in contacts if r.get("Azienda")}))
+    e.metric("Località", len(cities))
+    chart_rows = [
+        {"Azienda": str(r.get("Azienda", "")), "Punteggio CXI": int(r["Totale"])}
+        for r in priority_rows
+        if isinstance(r.get("Totale"), (int, float)) and r.get("Azienda")
+    ]
+    if chart_rows:
+        st.markdown("**Punteggio commerciale CXI (massimo 9)**")
+        chart_df = pd.DataFrame(chart_rows).set_index("Azienda")
+        st.bar_chart(chart_df, horizontal=True, x_label="Punteggio", y_label="Azienda")
+    st.caption("Dashboard calcolata dai risultati già disponibili: nessun credito Tavily aggiuntivo. I fatturati di società e gruppi non vengono sommati.")
+
 
 def show_result(item):
     st.caption(f"Ricerca del {item['date']} · {item['mode']}")
@@ -764,6 +802,7 @@ def show_result(item):
         st.dataframe(df, width="stretch", hide_index=True)
         if df.empty:
             st.caption("Nessun dato verificabile disponibile per questa sezione.")
+    show_dashboard(item["tables"])
     show_company_maps(item["tables"])
     st.download_button("📥 Scarica Excel delle 6 tabelle", data=excel_bytes(item["tables"]),
                        file_name=f"salespilot_ricerca_{item['id']}.xlsx",
