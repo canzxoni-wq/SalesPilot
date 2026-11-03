@@ -23,6 +23,11 @@ services:
       # Facoltativa: indirizzo pubblico dell'app, per il ritorno dal link di conferma email
       - key: APP_URL
         sync: false
+      # Informativa privacy: titolare e contatto (consigliate)
+      - key: PRIVACY_CONTROLLER
+        sync: false
+      - key: PRIVACY_CONTACT_EMAIL
+        sync: false
       # Alternativa senza Supabase: accesso con credenziali condivise
       - key: SALESPILOT_USERNAME
         sync: false

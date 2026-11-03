@@ -20,6 +20,10 @@ Se sono configurate le variabili Supabase, prevale la modalità con account indi
 - "Cancella cronologia" chiede conferma e cancella solo le ricerche dell'utente loggato.
 - L'app usa la chiave pubblica (anon/publishable) e il token dell'utente. La chiave `service_role` non serve e non va configurata.
 
+## Informativa privacy e Termini d'uso
+
+I testi sono in `legal.py` e sono consultabili nell'app agli indirizzi `/?pagina=privacy` e `/?pagina=termini`, anche senza accesso. Per registrarsi bisogna spuntare la casella di presa visione dell'informativa e accettazione dei termini; la versione accettata e la data vengono salvate nei metadati dell'utente su Supabase. Quando i testi cambiano, aggiornare `LEGAL_VERSION` in `legal.py`.
+
 ## Configurazione di Supabase
 
 1. Crea un progetto su supabase.com.
@@ -35,6 +39,7 @@ Se sono configurate le variabili Supabase, prevale la modalità con account indi
    - `TAVILY_API_KEY`: chiave della ricerca web Tavily
    - `SUPABASE_URL` e `SUPABASE_ANON_KEY`: per gli account individuali
    - in alternativa `SALESPILOT_USERNAME` e `SALESPILOT_PASSWORD`: per l'accesso condiviso
+   - `PRIVACY_CONTROLLER` e `PRIVACY_CONTACT_EMAIL`: titolare del trattamento ed email di contatto mostrati nell'Informativa privacy
    - `APP_URL`: facoltativa, indirizzo pubblico dell'app (altrimenti viene ricavato in automatico)
    - `GEMINI_MODEL`: facoltativa, predefinita `gemini-3.1-flash-lite`
 3. Esegui il deploy e apri l'indirizzo pubblico fornito da Render.
