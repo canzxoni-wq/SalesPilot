@@ -10,9 +10,17 @@ services:
       - key: PYTHON_VERSION
         value: 3.11.11
       - key: GEMINI_MODEL
-        value: gemini-2.5-flash
+        value: gemini-3.1-flash-lite
       - key: GEMINI_API_KEY
         sync: false
+      - key: TAVILY_API_KEY
+        sync: false
+      # Account individuali e archivio permanente (consigliato)
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      # Alternativa senza Supabase: accesso con credenziali condivise
       - key: SALESPILOT_USERNAME
         sync: false
       - key: SALESPILOT_PASSWORD

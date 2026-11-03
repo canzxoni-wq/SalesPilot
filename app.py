@@ -1,5 +1,6 @@
 import io
 import time
+import uuid
 import json
 import os
 import re
@@ -22,9 +23,16 @@ PASSWORD = os.getenv("SALESPILOT_PASSWORD") or os.getenv("CXI_PASSWORD", "")
 API_KEY = os.getenv("GEMINI_API_KEY", "")
 TAVILY_API_KEY = os.getenv("TAVILY_API_KEY", "")
 MODEL = os.getenv("GEMINI_MODEL", "gemini-3.1-flash-lite")
+# Numero di ricerche mostrate nella cronologia laterale. NON è un limite di
+# conservazione: nel database le ricerche restano finché l'utente non le
+# cancella (EC15: retention >= 90 giorni).
 MAX_HISTORY = 20
 SUPABASE_URL = os.getenv("SUPABASE_URL", "").rstrip("/")
-SUPABASE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY", "")
+# Chiave pubblica (anon / publishable). Le query usano il token dell'utente
+# loggato, quindi la Row Level Security di Supabase separa i dati per utente.
+# La chiave service_role NON serve e non va configurata.
+SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
+SUPABASE_TABLE = "salespilot_searches"
 
 SHEETS = {
     "1. New Names": ["Azienda", "Sede", "Fatturato", "Altri dati chiave", "Fonte"],
@@ -37,71 +45,144 @@ SHEETS = {
 KEYS = ["new_names", "priorita", "informazioni", "buyer_persona", "contatti", "servizi_cxi"]
 TITLES = ["Lista New Names", "Clusterizzazione e priorità", "Informazioni chiave sulle aziende", "Interlocutori e Buyer Persona", "Contatti suggeriti", "Servizi CXI pertinenti"]
 
-if not USERNAME or not PASSWORD or PASSWORD == "CAMBIA_QUESTA_PASSWORD":
-    st.error("Configura SALESPILOT_USERNAME e SALESPILOT_PASSWORD nelle variabili d'ambiente di Render.")
-    st.stop()
-
-if not st.session_state.get("authenticated", False):
-    st.title("SalesPilot · Accesso")
-    with st.form("login"):
-        user = st.text_input("Username")
-        password = st.text_input("Password", type="password")
-        submitted = st.form_submit_button("Accedi", width="stretch")
-    if submitted:
-        if hmac.compare_digest(user, USERNAME) and hmac.compare_digest(password, PASSWORD):
-            st.session_state.authenticated = True
-            st.rerun()
-        else:
-            st.error("Credenziali non valide")
-    st.stop()
-
-if "history" not in st.session_state:
-    st.session_state.history = []
-if "selected_id" not in st.session_state:
-    st.session_state.selected_id = None
-
 
 def db_enabled():
-    return bool(SUPABASE_URL and SUPABASE_KEY)
+    """Modalità multi-utente: login individuale Supabase + archivio permanente."""
+    return bool(SUPABASE_URL and SUPABASE_ANON_KEY)
 
 
-def db_request(method, resource, payload=None, params=None, extra_headers=None):
-    """Accesso al database dal solo server Render. Mai esporre la chiave al browser."""
-    headers = {"apikey": SUPABASE_KEY, "Authorization": f"Bearer {SUPABASE_KEY}",
+class AuthExpired(Exception):
+    """La sessione Supabase è scaduta e non è stato possibile rinnovarla."""
+
+
+def _auth_call(path, payload, token=None):
+    headers = {"apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json"}
+    if token:
+        headers["Authorization"] = f"Bearer {token}"
+    return requests.post(f"{SUPABASE_URL}/auth/v1/{path}", headers=headers, json=payload, timeout=15)
+
+
+def _store_session(data):
+    user = data.get("user") or {}
+    st.session_state.auth = {
+        "access_token": data["access_token"],
+        "refresh_token": data.get("refresh_token", ""),
+        "user_id": user.get("id", ""),
+        "email": user.get("email", ""),
+    }
+    st.session_state.authenticated = True
+
+
+def _auth_error_message(response):
+    try:
+        body = response.json()
+    except ValueError:
+        body = {}
+    text = " ".join(str(body.get(k, "")) for k in ("error_code", "msg", "error_description", "message")).lower()
+    if "email_not_confirmed" in text or "not confirmed" in text:
+        return "Conferma prima l'email dal link che ti abbiamo inviato, poi accedi."
+    if "invalid" in text and ("credential" in text or "login" in text or "grant" in text):
+        return "Email o password non corretti."
+    if "already" in text and ("registered" in text or "exists" in text):
+        return "Esiste già un account con questa email: accedi."
+    if "password" in text:
+        return "Password non valida: usa almeno 8 caratteri."
+    if response.status_code == 429:
+        return "Troppi tentativi. Riprova tra qualche minuto."
+    return "Accesso non riuscito. Riprova."
+
+
+def sign_in(email, password):
+    response = _auth_call("token?grant_type=password", {"email": email, "password": password})
+    if not response.ok:
+        return _auth_error_message(response)
+    _store_session(response.json())
+    return None
+
+
+def sign_up(email, password):
+    """Restituisce (errore, messaggio informativo)."""
+    response = _auth_call("signup", {"email": email, "password": password})
+    if not response.ok:
+        return _auth_error_message(response), None
+    data = response.json()
+    if data.get("access_token"):
+        _store_session(data)
+        return None, None
+    return None, "Account creato. Ti abbiamo inviato un'email di conferma: apri il link e poi accedi."
+
+
+def refresh_session():
+    auth = st.session_state.get("auth") or {}
+    if not auth.get("refresh_token"):
+        return False
+    try:
+        response = _auth_call("token?grant_type=refresh_token", {"refresh_token": auth["refresh_token"]})
+    except requests.RequestException:
+        return False
+    if not response.ok:
+        return False
+    _store_session(response.json())
+    return True
+
+
+def sign_out():
+    auth = st.session_state.get("auth") or {}
+    if db_enabled() and auth.get("access_token"):
+        try:
+            _auth_call("logout", {}, token=auth["access_token"])
+        except requests.RequestException:
+            pass
+    st.session_state.clear()
+
+
+def current_user_id():
+    return (st.session_state.get("auth") or {}).get("user_id", "")
+
+
+def db_request(method, resource, payload=None, params=None, extra_headers=None, _retry=True):
+    """Chiamata al database con il token dell'utente: la RLS limita ai suoi dati."""
+    token = (st.session_state.get("auth") or {}).get("access_token", "")
+    headers = {"apikey": SUPABASE_ANON_KEY, "Authorization": f"Bearer {token}",
                "Content-Type": "application/json"}
     if extra_headers:
         headers.update(extra_headers)
     response = requests.request(method, f"{SUPABASE_URL}/rest/v1/{resource}",
                                 headers=headers, json=payload, params=params, timeout=15)
+    if response.status_code == 401:
+        # Token scaduto (dura circa un'ora): rinnova una volta e ripeti.
+        if _retry and refresh_session():
+            return db_request(method, resource, payload, params, extra_headers, _retry=False)
+        raise AuthExpired()
     response.raise_for_status()
     return response.json() if response.content else []
 
 
 def load_history():
-    rows = db_request("GET", "salespilot_searches", params={
+    rows = db_request("GET", SUPABASE_TABLE, params={
         "select": "id,payload", "order": "created_at.desc", "limit": MAX_HISTORY})
     return [r["payload"] for r in reversed(rows) if isinstance(r.get("payload"), dict)]
 
 
 def save_search(item):
-    db_request("POST", "salespilot_searches", payload={"id": item["id"], "payload": item},
+    # Nessuna cancellazione automatica: le ricerche restano nell'archivio
+    # dell'utente (EC15). user_id è assegnato dal database con auth.uid().
+    db_request("POST", SUPABASE_TABLE, payload={"id": item["id"], "payload": item},
                extra_headers={"Prefer": "resolution=merge-duplicates,return=minimal"})
-    # Mantiene nel database soltanto le 20 ricerche più recenti.
-    old = db_request("GET", "salespilot_searches", params={
-        "select": "id", "order": "created_at.desc", "offset": MAX_HISTORY, "limit": 1000})
-    if old:
-        ids = ",".join('"' + str(row["id"]).replace('"', '') + '"' for row in old)
-        db_request("DELETE", "salespilot_searches", params={"id": f"in.({ids})"})
 
 
 def save_feedback(item):
-    db_request("PATCH", "salespilot_searches", payload={"payload": item},
+    db_request("PATCH", SUPABASE_TABLE, payload={"payload": item},
                params={"id": f"eq.{item['id']}"},
                extra_headers={"Prefer": "return=minimal"})
 
 
 def clear_history_db():
-    db_request("DELETE", "salespilot_searches", params={"id": "neq.__never__"})
+    # Cancella SOLO le ricerche dell'utente loggato (filtro esplicito + RLS).
+    user_id = current_user_id()
+    if not user_id:
+        raise AuthExpired()
+    db_request("DELETE", SUPABASE_TABLE, params={"user_id": f"eq.{user_id}"})
 
 
 def feedback_stats():
@@ -109,10 +190,92 @@ def feedback_stats():
     return rows[0] if rows else None
 
 
+def handle_expired_session():
+    st.session_state.clear()
+    st.session_state.auth_notice = "Sessione scaduta: accedi di nuovo."
+    st.rerun()
+
+
+def show_login():
+    st.title("SalesPilot · Accesso")
+    notice = st.session_state.pop("auth_notice", None)
+    if notice:
+        st.info(notice)
+    if not db_enabled():
+        with st.form("login"):
+            user = st.text_input("Username")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Accedi", width="stretch")
+        if submitted:
+            if hmac.compare_digest(user, USERNAME) and hmac.compare_digest(password, PASSWORD):
+                st.session_state.authenticated = True
+                st.rerun()
+            else:
+                st.error("Credenziali non valide")
+        return
+    st.caption("Ogni Account Manager ha il proprio account: le ricerche e le valutazioni sono visibili solo a chi le ha create.")
+    tab_login, tab_signup = st.tabs(["Accedi", "Crea account"])
+    with tab_login:
+        with st.form("login"):
+            email = st.text_input("Email")
+            password = st.text_input("Password", type="password")
+            submitted = st.form_submit_button("Accedi", width="stretch")
+        if submitted:
+            if not email.strip() or not password:
+                st.error("Inserisci email e password.")
+            else:
+                try:
+                    error = sign_in(email.strip(), password)
+                except requests.RequestException:
+                    error = "Servizio di accesso non raggiungibile. Riprova tra poco."
+                if error:
+                    st.error(error)
+                else:
+                    st.rerun()
+    with tab_signup:
+        with st.form("signup"):
+            email = st.text_input("Email", key="signup_email")
+            password = st.text_input("Password (almeno 8 caratteri)", type="password", key="signup_password")
+            password2 = st.text_input("Ripeti la password", type="password", key="signup_password2")
+            submitted = st.form_submit_button("Crea account", width="stretch")
+        if submitted:
+            if not email.strip() or len(password) < 8:
+                st.error("Inserisci un'email valida e una password di almeno 8 caratteri.")
+            elif password != password2:
+                st.error("Le due password non coincidono.")
+            else:
+                try:
+                    error, info = sign_up(email.strip(), password)
+                except requests.RequestException:
+                    error, info = "Servizio di accesso non raggiungibile. Riprova tra poco.", None
+                if error:
+                    st.error(error)
+                elif info:
+                    st.success(info)
+                else:
+                    st.rerun()
+
+
+if not db_enabled() and (not USERNAME or not PASSWORD or PASSWORD == "CAMBIA_QUESTA_PASSWORD"):
+    st.error("Configura SUPABASE_URL e SUPABASE_ANON_KEY (account individuali) oppure "
+             "SALESPILOT_USERNAME e SALESPILOT_PASSWORD (accesso condiviso) nelle variabili d'ambiente di Render.")
+    st.stop()
+
+if not st.session_state.get("authenticated", False):
+    show_login()
+    st.stop()
+
+if "history" not in st.session_state:
+    st.session_state.history = []
+if "selected_id" not in st.session_state:
+    st.session_state.selected_id = None
+
 if db_enabled() and not st.session_state.get("db_history_loaded", False):
     try:
         st.session_state.history = load_history()
         st.session_state.db_history_loaded = True
+    except AuthExpired:
+        handle_expired_session()
     except requests.RequestException as exc:
         print(f"DATABASE caricamento non disponibile: {type(exc).__name__}", flush=True)
         st.warning("Archivio temporaneamente non disponibile: la cronologia di questa sessione resta utilizzabile.")
@@ -914,7 +1077,11 @@ def show_company_maps(tables):
                 st.caption("Sede legale non verificata: Google Maps mostra i risultati per nome azienda e città (anche più sedi).")
             st.link_button("📍 Apri in Google Maps", maps_url)
         with right:
-            st.components.v1.iframe(embed_url, height=265, scrolling=False)
+            # st.iframe sostituisce st.components.v1.iframe (deprecato nelle versioni recenti).
+            if hasattr(st, "iframe"):
+                st.iframe(embed_url, height=265)
+            else:
+                st.components.v1.iframe(embed_url, height=265, scrolling=False)
         st.divider()
 
 def show_dashboard(tables):
@@ -994,6 +1161,8 @@ def show_feedback(item):
                 try:
                     save_feedback(item)
                     st.success("Grazie! Feedback salvato.")
+                except AuthExpired:
+                    st.error("Sessione scaduta: esci e accedi di nuovo per salvare il feedback.")
                 except requests.RequestException as exc:
                     print(f"DATABASE feedback non salvato: {type(exc).__name__}", flush=True)
                     st.error("Feedback non salvato nell'archivio. Riprova più tardi.")
@@ -1032,30 +1201,48 @@ def show_result(item):
 
 with st.sidebar:
     st.header("SalesPilot · Beta")
+    if db_enabled() and current_user_id():
+        st.caption(f"Accesso come **{html.escape(st.session_state.auth.get('email', ''))}**")
     if st.button("➕ Nuova ricerca", width="stretch"):
         st.session_state.selected_id = None
         st.rerun()
     st.divider()
     st.subheader("Cronologia ricerche")
-    st.caption(f"Ultime {MAX_HISTORY} ricerche" + (" salvate" if db_enabled() else " della sessione"))
+    st.caption(f"Ultime {MAX_HISTORY} ricerche" + (" del tuo archivio" if db_enabled() else " della sessione"))
     for item in reversed(st.session_state.history):
         label = f"{item['date']} · {item['query'][:38]}"
         if st.button(label, key=f"history_{item['id']}", width="stretch"):
             st.session_state.selected_id = item["id"]
             st.rerun()
-    if st.session_state.history and st.button("🗑️ Cancella cronologia", width="stretch"):
-        if db_enabled():
-            try:
-                clear_history_db()
-            except requests.RequestException:
-                st.error("Impossibile cancellare l'archivio. Riprova.")
-                st.stop()
-        st.session_state.history = []
-        st.session_state.selected_id = None
-        st.rerun()
+    if st.session_state.history:
+        if not st.session_state.get("confirm_clear", False):
+            if st.button("🗑️ Cancella cronologia", width="stretch"):
+                st.session_state.confirm_clear = True
+                st.rerun()
+        else:
+            st.warning("Vuoi cancellare definitivamente tutte le tue ricerche e i relativi feedback?"
+                       if db_enabled() else "Vuoi cancellare la cronologia di questa sessione?")
+            yes, no = st.columns(2)
+            if yes.button("Cancella", type="primary", width="stretch"):
+                if db_enabled():
+                    try:
+                        clear_history_db()
+                    except AuthExpired:
+                        handle_expired_session()
+                    except requests.RequestException:
+                        st.session_state.confirm_clear = False
+                        st.error("Impossibile cancellare l'archivio. Riprova.")
+                        st.stop()
+                st.session_state.history = []
+                st.session_state.selected_id = None
+                st.session_state.confirm_clear = False
+                st.rerun()
+            if no.button("Annulla", width="stretch"):
+                st.session_state.confirm_clear = False
+                st.rerun()
     st.divider()
     if st.button("Esci", width="stretch"):
-        st.session_state.clear()
+        sign_out()
         st.rerun()
 
 st.title("SalesPilot")
@@ -1069,8 +1256,14 @@ if db_enabled():
                        f"Dati: {float(stats['media_dati']):.1f}/5 · "
                        f"Utilità commerciale: {float(stats['media_utilita']):.1f}/5 "
                        f"({int(stats['numero_feedback'])} valutazioni)")
+    except AuthExpired:
+        handle_expired_session()
     except (requests.RequestException, TypeError, ValueError, KeyError) as exc:
         print(f"DATABASE statistiche non disponibili: {type(exc).__name__}", flush=True)
+
+save_notice = st.session_state.pop("save_notice", None)
+if save_notice:
+    st.warning(save_notice)
 
 selected = next((x for x in st.session_state.history if x["id"] == st.session_state.selected_id), None)
 if selected:
@@ -1080,7 +1273,8 @@ else:
 
 query = st.chat_input("Es. Trova 5 gruppi di concessionarie auto in Piemonte o Lombardia con fatturato >300 milioni...")
 if query and query.strip():
-    uid = datetime.now().strftime("%Y%m%d_%H%M%S_%f")
+    # Suffisso casuale: l'id è univoco anche fra utenti diversi nello stesso istante.
+    uid = datetime.now().strftime("%Y%m%d_%H%M%S_%f") + "_" + uuid.uuid4().hex[:8]
     item = {"id": uid, "date": datetime.now().strftime("%d/%m/%Y %H:%M"), "query": query.strip(), "mode": "Gemini (API)"}
     started_at = time.perf_counter()
     try:
@@ -1102,7 +1296,10 @@ if query and query.strip():
     if db_enabled():
         try:
             save_search(item)
+        except AuthExpired:
+            st.session_state.save_notice = ("Sessione scaduta: la ricerca è visibile ora, ma non è stata salvata "
+                                            "nell'archivio. Esci e accedi di nuovo.")
         except requests.RequestException as exc:
             print(f"DATABASE ricerca non salvata: {type(exc).__name__}", flush=True)
-            st.warning("Ricerca completata, ma non salvata nell'archivio permanente.")
+            st.session_state.save_notice = "Ricerca completata, ma non salvata nell'archivio permanente."
     st.rerun()

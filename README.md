@@ -1,36 +1,54 @@
 # SalesPilot
 
-Assistente AI per la ricerca e qualificazione di prospect B2B, con prioritizzazione e esportazione Excel. Prototipo universitario: i risultati AI richiedono verifica indipendente.
+Assistente AI per la ricerca e qualificazione di prospect B2B per CXI, con prioritizzazione, suggerimento dei servizi ed esportazione Excel. Prototipo universitario (caso 28, Ingegneria della Qualità, Politecnico di Torino): i risultati AI richiedono verifica indipendente.
 
-## Pubblicazione con GitHub e Render
+L'agent (ricerca, prioritizzazione, servizi CXI, arricchimenti) è basato sul repository [SalesPilot](https://github.com/canzxoni-wq/SalesPilot) di canzxoni-wq. Questa versione aggiunge gli account individuali e l'archivio permanente su Supabase.
 
-1. Carica i file di questa cartella nella **radice** del repository GitHub `SalesPilot`, inclusi `render.yaml`, `.gitignore` e la cartella `.streamlit`. **Non caricare `.env`, `.venv` o credenziali.**
-2. Su Render crea **New > Blueprint**, collega il repository GitHub e seleziona il blueprint dal file `render.yaml`. Se il piano free non è disponibile nel tuo account, scegli un piano compatibile.
-3. Imposta le variabili d'ambiente richieste (Render può chiederle durante la creazione o puoi aggiungerle da **Environment**):
+## Accesso e archivio
+
+L'app funziona in due modalità, scelte automaticamente dalle variabili d'ambiente.
+
+| Modalità | Variabili | Accesso | Cronologia |
+| --- | --- | --- | --- |
+| Account individuali (consigliata) | `SUPABASE_URL`, `SUPABASE_ANON_KEY` | Email e password, un account per Account Manager | Archivio permanente, visibile solo all'utente che ha fatto la ricerca |
+| Accesso condiviso | `SALESPILOT_USERNAME`, `SALESPILOT_PASSWORD` | Credenziali uniche per tutti | Solo per la sessione aperta |
+
+Se sono configurate le variabili Supabase, prevale la modalità con account individuali.
+
+- Ogni utente vede, valuta e cancella solo le proprie ricerche: la separazione è garantita dalla Row Level Security del database, non solo dall'interfaccia.
+- Le ricerche non vengono cancellate in automatico (EC15: retention ≥ 90 giorni). La barra laterale mostra le ultime 20; le altre restano nell'archivio.
+- "Cancella cronologia" chiede conferma e cancella solo le ricerche dell'utente loggato.
+- L'app usa la chiave pubblica (anon/publishable) e il token dell'utente. La chiave `service_role` non serve e non va configurata.
+
+## Configurazione di Supabase
+
+1. Crea un progetto su supabase.com.
+2. Nel **SQL Editor** esegui il file `supabase/schema.sql`: crea la tabella `salespilot_searches`, le regole di sicurezza e la vista `salespilot_feedback_stats`.
+3. In **Authentication → URL Configuration** imposta **Site URL** all'indirizzo pubblico dell'app su Render. Il link nell'email di conferma della registrazione porta lì.
+4. Copia **Project URL** e chiave **anon/publishable** (Project Settings → API Keys).
+
+## Pubblicazione su Render
+
+1. Su Render crea **New → Blueprint**, collega questo repository e usa il file `render.yaml`.
+2. Imposta le variabili d'ambiente (sezione **Environment**):
    - `GEMINI_API_KEY`: chiave API di Gemini
-   - `SALESPILOT_USERNAME`: nome utente per il login
-   - `SALESPILOT_PASSWORD`: password lunga e casuale per il login
-   - `GEMINI_MODEL`: facoltativa, predefinita `gemini-2.5-flash`
-4. Esegui il deploy e apri l'indirizzo pubblico fornito da Render.
-
-> Il login è basato su una password condivisa e sessione Streamlit: è adatto a una demo privata con utenti fidati, **non** è un sistema di autenticazione enterprise. La pagina di login protegge l'interfaccia, non sostituisce controlli infrastrutturali di accesso. Usa credenziali uniche e HTTPS, non condividere l'indirizzo pubblicamente se contiene dati sensibili.
+   - `TAVILY_API_KEY`: chiave della ricerca web Tavily
+   - `SUPABASE_URL` e `SUPABASE_ANON_KEY`: per gli account individuali
+   - in alternativa `SALESPILOT_USERNAME` e `SALESPILOT_PASSWORD`: per l'accesso condiviso
+   - `GEMINI_MODEL`: facoltativa, predefinita `gemini-3.1-flash-lite`
+3. Esegui il deploy e apri l'indirizzo pubblico fornito da Render.
 
 ## Avvio locale
 
 ```bash
 python -m pip install -r requirements.txt
-```
-
-Copia `.env.example` in `.env`, sostituisci i segnaposto con credenziali locali e avvia:
-
-```bash
+cp env.example .env   # poi inserisci le tue chiavi
 streamlit run app.py
 ```
 
 ## Limiti del prototipo
 
-- **Demo (senza API)** restituisce esclusivamente aziende fittizie.
-- **Gemini (API)** genera proposte di prospect, ma non garantisce ricerche web aggiornate o fonti verificate: il codice attuale non abilita Google Search grounding.
-- I servizi suggeriti sono **ipotesi**, non un catalogo validato.
-- Verifica manualmente nomi, siti, numeri e priorità prima dell'uso commerciale.
-- La chiave API e la password vanno inserite solo nelle variabili d'ambiente di Render o nel `.env` locale, mai su GitHub.
+- Le aziende sono proposte da Gemini a partire dalle fonti Tavily: verifica nomi, siti, numeri e priorità prima dell'uso commerciale.
+- I servizi suggeriti sono ipotesi commerciali, non un catalogo validato.
+- I contatti nominativi provengono da fonti professionali pubbliche: prima dell'uso commerciale verifica la base giuridica e gli obblighi privacy applicabili.
+- Le chiavi vanno inserite solo nelle variabili d'ambiente di Render o nel `.env` locale, mai su GitHub.
