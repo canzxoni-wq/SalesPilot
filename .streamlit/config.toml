@@ -5,3 +5,6 @@ maxUploadSize = 50
 [theme]
 base = "light"
 primaryColor = "#087F8C"
+backgroundColor = "#F6F7F7"
+secondaryBackgroundColor = "#EEF2F3"
+textColor = "#102A33"
