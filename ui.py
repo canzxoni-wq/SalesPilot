@@ -13,22 +13,21 @@ from urllib.parse import urlparse
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo-icon.png")
 
 THEME = {
-    # Palette ricavata dal sito di Customer Experience Italia (pagina Digital X)
-    "primary": "#25CAD2",       # azzurro CXI: pulsanti, barre dei punteggi, evidenze
-    "primary_dark": "#1DB3BA",  # hover dei pulsanti
-    "on_primary": "#102256",    # testo sopra l'azzurro (il bianco non avrebbe contrasto sufficiente)
-    "primary_text": "#0B6F78",  # azzurro scuro per testi e chip su fondo chiaro (contrasto AA)
-    "deep": "#102256",          # blu notte CXI: pannello di accesso, badge della classifica
-    "deep_text": "#C9D3EE",     # testo secondario sul blu notte
-    "accent_light": "#25CAD2",  # azzurro sul blu notte
-    "ink": "#0E1B3D",           # testo principale
-    "muted": "#4A5573",         # testo secondario (contrasto AA su bianco)
-    "bg": "#F5F7FB",            # sfondo della pagina
+    "primary": "#087F8C",       # pulsanti, link, barre dei punteggi
+    "primary_dark": "#05606A",  # hover dei pulsanti, testo dei chip
+    "on_primary": "#FFFFFF",    # testo sopra il colore primario
+    "primary_text": "#087F8C",  # link e parola "Pilot" su fondo chiaro
+    "deep": "#0B3A44",          # pannello di accesso, badge della classifica
+    "deep_text": "#CFE3E6",     # testo secondario sul colore deep
+    "accent_light": "#7FD6DE",  # icone sul colore deep
+    "ink": "#102A33",           # testo principale
+    "muted": "#4A5F66",         # testo secondario (contrasto AA su bianco)
+    "bg": "#F6F7F7",            # sfondo della pagina
     "surface": "#FFFFFF",       # schede e barra laterale
-    "border": "#DDE3EE",        # bordi
-    "soft": "#E3F7F8",          # sfondo di chip ed elemento selezionato
-    "warn_bg": "#FFF3E6",
-    "warn_ink": "#7A4200",
+    "border": "#DCE4E6",        # bordi
+    "soft": "#E6F3F4",          # sfondo di chip ed elemento selezionato
+    "warn_bg": "#FFF6E5",
+    "warn_ink": "#6B4A00",
 }
 
 
@@ -125,7 +124,7 @@ button[kind^="primary"]:hover {{ background: {t['primary_dark']} !important; bor
 .sp-company {{ font-size: 20px; font-weight: 700; color: {t['ink']}; margin: 0; }}
 .sp-company-meta {{ font-size: 14px; color: {t['muted']}; }}
 .sp-chips {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 4px; }}
-.sp-chip {{ padding: 4px 10px; border-radius: 999px; background: {t['soft']}; color: {t['primary_text']}; font-size: 13px; font-weight: 600; }}
+.sp-chip {{ padding: 4px 10px; border-radius: 999px; background: {t['soft']}; color: {t['primary_dark']}; font-size: 13px; font-weight: 600; }}
 .sp-chip-warn {{ background: {t['warn_bg']}; color: {t['warn_ink']}; }}
 .sp-score-head {{ display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }}
 .sp-score-head span {{ font-size: 13px; font-weight: 600; color: {t['muted']}; }}
@@ -203,7 +202,7 @@ def html_table(rows, columns):
 
 def login_panel():
     return f"""<div class="sp-login-panel">
-<div class="sp-brand" style="gap:16px">{logo_icon(68, bg=THEME['primary'], top=THEME['deep'], bars=THEME['deep'])}{_wordmark('#FFFFFF', THEME['accent_light'], 40)}</div>
+<div class="sp-brand" style="gap:16px">{logo_icon(68, bg=THEME['primary'], top='#FFFFFF')}{_wordmark('#FFFFFF', THEME['accent_light'], 40)}</div>
 <h1>Dal target ai clienti da contattare, con le fonti.</h1>
 <p>Descrivi il tipo di azienda che cerchi. SalesPilot trova i new names, li ordina per priorità e suggerisce i servizi CXI più adatti.</p>
 <ul>
@@ -217,7 +216,7 @@ def login_panel():
 
 def rank_badge(position):
     top = position <= 2
-    bg = THEME["deep"] if top else "#E4E8F1"
+    bg = THEME["deep"] if top else "#E1E7E8"
     fg = "#FFFFFF" if top else THEME["ink"]
     sub = THEME["deep_text"] if top else THEME["muted"]
     return (f'<div class="sp-rank" style="background:{bg};color:{fg}">'
