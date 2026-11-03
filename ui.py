@@ -36,15 +36,33 @@ def safe_url(url):
     return url if parsed.scheme in ("http", "https") and parsed.netloc else ""
 
 
+def selected_history_css(key):
+    """Evidenzia nella barra laterale la ricerca aperta."""
+    return (f"<style>.st-key-{key} button {{ background: {THEME['soft']} !important; "
+            f"font-weight: 600; }}</style>")
+
+
 def global_css():
     t = THEME
     return f"""<style>
 .stApp {{ background: {t['bg']}; }}
 .block-container {{ max-width: 1180px; padding-top: 3.5rem; }}
-#MainMenu, footer, [data-testid="stToolbar"] {{ visibility: hidden; }}
+/* Nasconde solo menu e Deploy: il pulsante per riaprire la barra laterale resta visibile. */
+#MainMenu, footer, [data-testid="stMainMenu"], [data-testid="stAppDeployButton"] {{ display: none; }}
+header[data-testid="stHeader"] {{ background: transparent; }}
+[data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapsedControl"] {{ visibility: visible; display: flex; }}
 h1, h2, h3 {{ color: {t['ink']}; letter-spacing: -0.015em; }}
 [data-testid="stSidebar"] {{ background: {t['surface']}; border-right: 1px solid {t['border']}; }}
-[data-testid="stSidebar"] .stButton button {{ justify-content: flex-start; text-align: left; border-color: transparent; background: transparent; }}
+[data-testid="stSidebar"] .stButton button {{ justify-content: flex-start; text-align: left; border-color: transparent; background: transparent;
+  width: 100%; min-height: 38px; padding: 6px 10px; }}
+[data-testid="stSidebar"] .stButton button > div,
+[data-testid="stSidebar"] .stButton button [data-testid="stMarkdownContainer"] {{ min-width: 0; max-width: 100%; width: 100%; justify-content: flex-start; text-align: left; }}
+[data-testid="stSidebar"] .stButton button[kind="primary"] > div,
+[data-testid="stSidebar"] .stButton button[kind="primary"] [data-testid="stMarkdownContainer"],
+[data-testid="stSidebar"] .stButton button[kind="primary"] p {{ justify-content: center; text-align: center; }}
+[data-testid="stSidebar"] .stButton button p {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; margin: 0; }}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 0.35rem; }}
+[data-testid="stSidebar"] .stTextInput input {{ min-height: 38px; }}
 [data-testid="stSidebar"] .stButton button:hover {{ background: {t['soft']}; border-color: transparent; color: {t['ink']}; }}
 [data-testid="stSidebar"] .stButton button[kind="primary"] {{ justify-content: center; background: {t['primary']}; color: #FFFFFF; }}
 [data-testid="stSidebar"] .stButton button[kind="primary"]:hover {{ background: {t['primary_dark']}; color: #FFFFFF; }}
@@ -58,12 +76,11 @@ h1, h2, h3 {{ color: {t['ink']}; letter-spacing: -0.015em; }}
 .stTabs [data-baseweb="tab"] {{ min-height: 44px; padding: 0 14px; font-weight: 600; }}
 .stTabs [aria-selected="true"] {{ color: {t['ink']}; }}
 .stTabs [data-baseweb="tab-highlight"] {{ background: {t['primary']}; height: 3px; }}
-.sp-brand {{ display: flex; align-items: center; gap: 10px; margin: 0 0 6px; }}
+.sp-brand {{ display: flex; align-items: center; gap: 10px; margin: 0 0 16px; }}
 .sp-brand-mark {{ width: 34px; height: 34px; border-radius: 9px; background: {t['deep']}; display: flex; align-items: center; justify-content: center; }}
 .sp-brand-name {{ font-size: 19px; font-weight: 700; color: {t['ink']}; }}
 .sp-label {{ font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: {t['muted']}; margin: 6px 0 2px; }}
 .sp-muted {{ color: {t['muted']}; font-size: 14px; }}
-.sp-note {{ padding: 12px 14px; border-radius: 10px; background: {t['warn_bg']}; color: {t['warn_ink']}; font-size: 14px; line-height: 1.45; }}
 .sp-rank {{ width: 56px; height: 56px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; }}
 .sp-rank span {{ font-size: 11px; font-weight: 600; }}
 .sp-rank strong {{ font-size: 22px; line-height: 1; }}
@@ -87,21 +104,29 @@ h1, h2, h3 {{ color: {t['ink']}; letter-spacing: -0.015em; }}
 </style>"""
 
 
-def _search_icon(stroke):
-    return (f'<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="{stroke}" '
-            'stroke-width="2.4" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"></circle>'
-            '<path d="M20 20l-3.5-3.5"></path></svg>')
+def logo_icon(size=34, bg=None, top=None, bars="#FFFFFF"):
+    """Logo SalesPilot (proposta F · Classifica): tre barre in ordine di priorità."""
+    bg = bg or THEME["deep"]
+    top = top or THEME["accent_light"]
+    return (f'<svg width="{size}" height="{size}" viewBox="0 0 48 48" role="img" aria-label="Logo SalesPilot">'
+            f'<rect width="48" height="48" rx="12" fill="{bg}"></rect>'
+            f'<rect x="12" y="13" width="24" height="6" rx="3" fill="{top}"></rect>'
+            f'<rect x="12" y="21" width="17" height="6" rx="3" fill="{bars}" fill-opacity="0.7"></rect>'
+            f'<rect x="12" y="29" width="10" height="6" rx="3" fill="{bars}" fill-opacity="0.4"></rect></svg>')
+
+
+def _wordmark(sales_color, pilot_color, size=19):
+    return (f'<span style="font-size:{size}px;letter-spacing:-0.02em"><span style="font-weight:700;color:{sales_color}">'
+            f'Sales</span><span style="font-weight:600;color:{pilot_color}">Pilot</span></span>')
 
 
 def brand_header():
-    return (f'<div class="sp-brand"><div class="sp-brand-mark">{_search_icon(THEME["accent_light"])}</div>'
-            '<span class="sp-brand-name">SalesPilot</span></div>')
+    return (f'<div class="sp-brand">{logo_icon(34)}{_wordmark(THEME["ink"], THEME["primary"])}</div>')
 
 
 def login_panel():
     return f"""<div class="sp-login-panel">
-<div class="sp-brand"><div class="sp-brand-mark" style="background:{THEME['primary']}">{_search_icon('#FFFFFF')}</div>
-<span class="sp-brand-name" style="color:#FFFFFF">SalesPilot</span></div>
+<div class="sp-brand">{logo_icon(40, bg=THEME['primary'], top='#FFFFFF')}{_wordmark('#FFFFFF', THEME['accent_light'], 22)}</div>
 <h1>Dal target ai clienti da contattare, con le fonti.</h1>
 <p>Descrivi il tipo di azienda che cerchi. SalesPilot trova i new names, li ordina per priorità e suggerisce i servizi CXI più adatti.</p>
 <ul>

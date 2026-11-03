@@ -18,7 +18,9 @@ import legal
 import ui
 
 load_dotenv()
-st.set_page_config(page_title="SalesPilot | AI Sales Agent", page_icon="🔎", layout="wide")
+_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo-icon.png")
+st.set_page_config(page_title="SalesPilot | AI Sales Agent",
+                   page_icon=_LOGO_PATH if os.path.exists(_LOGO_PATH) else "📊", layout="wide")
 st.markdown(ui.global_css(), unsafe_allow_html=True)
 
 USERNAME = os.getenv("SALESPILOT_USERNAME") or os.getenv("CXI_USERNAME", "")
@@ -1322,8 +1324,9 @@ def show_result(item):
         meta += f" · {'terminata' if item.get('error') else 'completata'} in {format_duration(item['duration_seconds'])}"
     head, action = st.columns([0.78, 0.22], vertical_alignment="bottom")
     with head:
-        st.markdown(f'<p class="sp-muted" style="margin:0">{ui.esc(meta)}</p>', unsafe_allow_html=True)
-        st.markdown(f"### {ui.esc(item['query'])}")
+        st.markdown(f"## {ui.esc(short_title(item['query']))}")
+        st.markdown(f'<p class="sp-muted" style="margin:-6px 0 2px">{ui.esc(item["query"])}</p>'
+                    f'<p class="sp-muted" style="margin:0;font-size:13px">{ui.esc(meta)}</p>', unsafe_allow_html=True)
     if item.get("error"):
         st.error(item["error"])
         return
@@ -1383,9 +1386,6 @@ def show_home():
     for col, (sector, text) in zip(st.columns(len(EXAMPLES)), EXAMPLES):
         col.button(f"**{sector}**  \n{text}", key=f"example_{sector}", width="stretch",
                    on_click=_use_example, args=(text,))
-    st.markdown('<div class="sp-note">Non inserire nelle ricerche dati personali o informazioni riservate. '
-                'I risultati sono generati da AI e vanno verificati prima dell\'uso commerciale.</div>',
-                unsafe_allow_html=True)
     if db_enabled():
         try:
             stats = feedback_stats()
@@ -1434,12 +1434,26 @@ def run_search(query):
     st.rerun()
 
 
-def _history_label(item):
+_TITLE_LEAD = re.compile(
+    r"^\s*(?:per favore\s+)?(?:trova(?:mi)?|cerca(?:mi)?|individua|seleziona|elenca|dammi|mostrami|voglio|vorrei)\s+"
+    r"(?:almeno\s+|massimo\s+|circa\s+)?(?:\d{1,3}\s+)?"
+    r"(?:(?:gruppi|aziende|imprese|società|societa|prospect|nomi)\s+(?:di\s+)?)?", re.I)
+_TITLE_CUT = re.compile(r"\s+(?:con|che|aventi|dove|e\s+con)\s+|[,;:.(]", re.I)
+
+
+def short_title(query):
+    """Titolo breve della ricerca, come i titoli delle chat: niente verbo iniziale né vincoli finali."""
+    text = _TITLE_LEAD.sub("", str(query or "").strip())
+    text = _TITLE_CUT.split(text, maxsplit=1)[0].strip() or str(query or "").strip()
+    if len(text) > 60:
+        text = text[:58].rsplit(" ", 1)[0] + "…"
+    return text[:1].upper() + text[1:]
+
+
+def _history_tooltip(item):
     count = len(item.get("tables", {}).get("new_names", [])) if not item.get("error") else 0
-    detail = f"{item['date']} · {count} aziende" if count else f"{item['date']} · non riuscita" \
-        if item.get("error") else item["date"]
-    text = item["query"] if len(item["query"]) <= 42 else item["query"][:40].rstrip() + "…"
-    return f"**{text}**  \n{detail}"
+    status = "non riuscita" if item.get("error") else f"{count} aziende"
+    return f"{item['query']}\n\n{item['date']} · {status}"
 
 
 with st.sidebar:
@@ -1447,11 +1461,22 @@ with st.sidebar:
     if st.button("＋ Nuova ricerca", type="primary", width="stretch"):
         st.session_state.selected_id = None
         st.rerun()
-    st.markdown('<p class="sp-label">Ultime ricerche</p>', unsafe_allow_html=True)
+    history_filter = st.text_input("Cerca", placeholder="🔍 Cerca nelle ricerche", key="history_filter",
+                                   label_visibility="collapsed")
+    st.markdown('<p class="sp-label">Recenti</p>', unsafe_allow_html=True)
+    needle = history_filter.strip().casefold()
+    visible = [it for it in reversed(st.session_state.history)
+               if not needle or needle in (short_title(it["query"]) + " " + it["query"]).casefold()]
     if not st.session_state.history:
         st.caption("Nessuna ricerca ancora.")
-    for item in reversed(st.session_state.history):
-        if st.button(_history_label(item), key=f"history_{item['id']}", width="stretch"):
+    elif not visible:
+        st.caption("Nessuna ricerca trovata.")
+    for item in visible:
+        key = f"history_{item['id']}"
+        if item["id"] == st.session_state.selected_id:
+            st.markdown(ui.selected_history_css(key), unsafe_allow_html=True)
+        label = ("⚠ " if item.get("error") else "") + short_title(item["query"])
+        if st.button(label, key=key, width="stretch", help=_history_tooltip(item)):
             st.session_state.selected_id = item["id"]
             st.rerun()
     if st.session_state.history:
