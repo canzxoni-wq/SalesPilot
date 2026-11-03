@@ -14,9 +14,12 @@ import requests
 import streamlit as st
 from dotenv import load_dotenv
 
+import legal
+import ui
+
 load_dotenv()
 st.set_page_config(page_title="SalesPilot | AI Sales Agent", page_icon="🔎", layout="wide")
-st.markdown("""<style>.block-container{max-width:1250px;padding-top:1.7rem}h1{letter-spacing:-.035em}</style>""", unsafe_allow_html=True)
+st.markdown(ui.global_css(), unsafe_allow_html=True)
 
 USERNAME = os.getenv("SALESPILOT_USERNAME") or os.getenv("CXI_USERNAME", "")
 PASSWORD = os.getenv("SALESPILOT_PASSWORD") or os.getenv("CXI_PASSWORD", "")
@@ -115,12 +118,19 @@ def app_base_url():
 
 
 def sign_up(email, password):
-    """Restituisce (errore, messaggio informativo)."""
+    """Restituisce (errore, messaggio informativo).
+
+    Nei metadati dell'utente viene registrata la versione dell'informativa e dei
+    termini accettati, con data e ora: serve a dimostrare l'accettazione.
+    """
     # Dopo il clic sul link di conferma, Supabase riporta l'utente all'app con
     # ?verificato=1, così l'app può mostrare "account verificato".
     base = app_base_url()
     path = f"signup?redirect_to={quote(base + '/?verificato=1', safe='')}" if base else "signup"
-    response = _auth_call(path, {"email": email, "password": password})
+    response = _auth_call(path, {"email": email, "password": password, "data": {
+        "privacy_terms_version": legal.LEGAL_VERSION,
+        "privacy_terms_accepted_at": datetime.now().astimezone().isoformat(timespec="seconds"),
+    }})
     if not response.ok:
         return _auth_error_message(response), None
     data = response.json()
@@ -214,8 +224,33 @@ def handle_expired_session():
     st.rerun()
 
 
+def legal_link(page):
+    """Link assoluto alle pagine legali: Streamlit lo apre in una nuova scheda,
+    così il modulo di registrazione non perde i dati inseriti."""
+    return f"{app_base_url()}/?pagina={page}"
+
+
+def show_legal_page(page):
+    st.markdown(legal.privacy_text() if page == "privacy" else legal.terms_text())
+    st.divider()
+    other = ("termini", "Termini d'uso") if page == "privacy" else ("privacy", "Informativa privacy")
+    st.markdown(f"[Leggi anche: {other[1]}]({legal_link(other[0])}) · [Torna a SalesPilot]({app_base_url()}/)")
+
+
+def show_legal_footer():
+    st.caption(f"[Informativa privacy]({legal_link('privacy')}) · [Termini d'uso]({legal_link('termini')})")
+
+
 def show_login():
-    st.title("SalesPilot · Accesso")
+    panel, form = st.columns([1, 1], gap="large")
+    with panel:
+        st.markdown(ui.login_panel(), unsafe_allow_html=True)
+    with form:
+        _login_forms()
+
+
+def _login_forms():
+    st.markdown("## Benvenuto")
     if st.session_state.pop("just_verified", False):
         st.success("✅ Il tuo account è stato verificato. Ora puoi accedere con la tua email e password.")
     notice = st.session_state.pop("auth_notice", None)
@@ -225,7 +260,7 @@ def show_login():
         with st.form("login"):
             user = st.text_input("Username")
             password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Accedi", width="stretch")
+            submitted = st.form_submit_button("Accedi", type="primary", width="stretch")
         if submitted:
             if hmac.compare_digest(user, USERNAME) and hmac.compare_digest(password, PASSWORD):
                 st.session_state.authenticated = True
@@ -233,13 +268,13 @@ def show_login():
             else:
                 st.error("Credenziali non valide")
         return
-    st.caption("Ogni Account Manager ha il proprio account: le ricerche e le valutazioni sono visibili solo a chi le ha create.")
+    st.markdown('<p class="sp-muted">Ogni Account Manager ha il proprio account: le ricerche e le valutazioni sono visibili solo a chi le ha create.</p>', unsafe_allow_html=True)
     tab_login, tab_signup = st.tabs(["Accedi", "Crea account"])
     with tab_login:
         with st.form("login"):
             email = st.text_input("Email")
             password = st.text_input("Password", type="password")
-            submitted = st.form_submit_button("Accedi", width="stretch")
+            submitted = st.form_submit_button("Accedi", type="primary", width="stretch")
         if submitted:
             if not email.strip() or not password:
                 st.error("Inserisci email e password.")
@@ -257,12 +292,18 @@ def show_login():
             email = st.text_input("Email", key="signup_email")
             password = st.text_input("Password (almeno 8 caratteri)", type="password", key="signup_password")
             password2 = st.text_input("Ripeti la password", type="password", key="signup_password2")
-            submitted = st.form_submit_button("Crea account", width="stretch")
+            accepted = st.checkbox(
+                f"Ho letto l'[Informativa privacy]({legal_link('privacy')}) e accetto i "
+                f"[Termini d'uso]({legal_link('termini')})",
+                key="signup_accept")
+            submitted = st.form_submit_button("Crea account", type="primary", width="stretch")
         if submitted:
             if not email.strip() or len(password) < 8:
                 st.error("Inserisci un'email valida e una password di almeno 8 caratteri.")
             elif password != password2:
                 st.error("Le due password non coincidono.")
+            elif not accepted:
+                st.error("Per creare l'account devi dichiarare di aver letto l'Informativa privacy e accettare i Termini d'uso.")
             else:
                 try:
                     error, info = sign_up(email.strip(), password)
@@ -274,7 +315,13 @@ def show_login():
                     st.success(info)
                 else:
                     st.rerun()
+    show_legal_footer()
 
+
+# Pagine Informativa privacy e Termini d'uso: consultabili anche senza accesso.
+if st.query_params.get("pagina") in ("privacy", "termini"):
+    show_legal_page(st.query_params["pagina"])
+    st.stop()
 
 if not db_enabled() and (not USERNAME or not PASSWORD or PASSWORD == "CAMBIA_QUESTA_PASSWORD"):
     st.error("Configura SUPABASE_URL e SUPABASE_ANON_KEY (account individuali) oppure "
@@ -1076,7 +1123,6 @@ def show_company_maps(tables):
     companies = tables.get("new_names", [])
     if not companies:
         return
-    st.subheader("6. Sedi aziendali e Google Maps")
     st.caption("Quando disponibile, la mappa mostra la sede legale dell’azienda. Se l’indirizzo non è verificabile, mostra i risultati di Google Maps per il nome dell’azienda e la località, che possono includere più sedi e punti vendita.")
     addresses = tables.get("map_addresses", {})
     for row in companies:
@@ -1113,43 +1159,6 @@ def show_company_maps(tables):
                 st.components.v1.iframe(embed_url, height=265, scrolling=False)
         st.divider()
 
-def show_dashboard(tables):
-    """Indicatori e grafici locali: nessuna richiesta Gemini o Tavily."""
-    companies = tables.get("new_names", [])
-    if not companies:
-        return
-    priority_rows = tables.get("priorita", [])
-    contacts = tables.get("contatti", [])
-    valid_revenues = sum(
-        bool(re.search(r"\d", str(r.get("Fatturato", ""))))
-        and str(r.get("Fatturato", "")).strip().casefold()
-        not in ("dato non disponibile", "non verificato")
-        for r in companies
-    )
-    high_priority = sum(
-        isinstance(r.get("Totale"), (int, float)) and r["Totale"] >= 7
-        for r in priority_rows
-    )
-    cities = {str(r.get("Sede", "")).strip() for r in companies}
-    cities -= {"", "Non verificato", "Dato non disponibile", "Non individuato"}
-    st.subheader("📊 Dashboard commerciale")
-    a, b, c, d, e = st.columns(5)
-    a.metric("Aziende", len(companies))
-    b.metric("Priorità alta (7–9)", high_priority)
-    c.metric("Fatturati disponibili", f"{valid_revenues}/{len(companies)}")
-    d.metric("Contatti suggeriti", len({r.get("Azienda") for r in contacts if r.get("Azienda")}))
-    e.metric("Località", len(cities))
-    chart_rows = [
-        {"Azienda": str(r.get("Azienda", "")), "Punteggio CXI": int(r["Totale"])}
-        for r in priority_rows
-        if isinstance(r.get("Totale"), (int, float)) and r.get("Azienda")
-    ]
-    if chart_rows:
-        st.markdown("**Punteggio commerciale CXI (massimo 9)**")
-        chart_df = pd.DataFrame(chart_rows).set_index("Azienda")
-        st.bar_chart(chart_df, horizontal=True, x_label="Punteggio", y_label="Azienda")
-
-
 def format_duration(seconds):
     """Durata effettiva della ricerca, comprese le chiamate alle API."""
     seconds = max(0, round(float(seconds)))
@@ -1159,93 +1168,295 @@ def format_duration(seconds):
     return f"{remainder} sec"
 
 
+PRIVACY_CONTACTS_NOTE = ("🔒 Privacy: i contatti indicati provengono da fonti professionali pubbliche. "
+                         "Sono riportati solo nome, ruolo e link pertinenti alla ricerca B2B. Prima di utilizzarli "
+                         "per finalità commerciali, verificare la base giuridica e gli obblighi privacy applicabili.")
+
+EXAMPLES = [
+    ("Automotive", "Trova 5 gruppi di concessionarie auto in espansione in Piemonte o Lombardia con fatturato oltre 300 milioni di euro"),
+    ("Sanità privata", "Trova 5 poliambulatori privati in Lombardia con ricavi oltre 100 milioni di euro"),
+    ("Energy retail", "Trova 5 operatori luce e gas di medie dimensioni, tra 0,5 e 1,5 milioni di clienti"),
+]
+
+
+def summary_counts(tables):
+    companies = tables.get("new_names", [])
+    priority_rows = tables.get("priorita", [])
+    contacts = tables.get("contatti", [])
+    revenues = sum(not ui.is_missing(r.get("Fatturato")) and bool(re.search(r"\d", str(r.get("Fatturato", ""))))
+                   for r in companies)
+    high = sum(isinstance(r.get("Totale"), (int, float)) and r["Totale"] >= 7 for r in priority_rows)
+    contacted = len({r.get("Azienda") for r in contacts if r.get("Azienda")})
+    return len(companies), high, revenues, contacted
+
+
+def show_kpis(item):
+    tables = item["tables"]
+    n, high, revenues, contacted = summary_counts(tables)
+    expected = requested_company_count(item["query"])
+    cols = st.columns(4)
+    values = [
+        ("Aziende trovate", f"{n} / {expected}" if expected else str(n)),
+        ("Priorità alta (7–9)", str(high)),
+        ("Fatturati disponibili", f"{revenues} / {n}"),
+        ("Contatti individuati", str(contacted)),
+    ]
+    for col, (label, value) in zip(cols, values):
+        with col.container(border=True):
+            st.metric(label, value)
+
+
+def show_company_cards(tables):
+    companies = tables.get("new_names", [])
+    if not companies:
+        st.info("Nessuna azienda utilizzabile individuata. Non sono stati aggiunti nomi inventati.")
+        return
+    priorities = {r.get("Azienda"): r for r in tables.get("priorita", [])}
+    infos = {r.get("Azienda"): r for r in tables.get("informazioni", [])}
+    services = {r.get("Azienda"): r for r in tables.get("servizi_cxi", [])}
+    details = tables.get("score_details", {})
+    for position, company in enumerate(companies, 1):
+        name = company.get("Azienda", "")
+        prio = priorities.get(name, {})
+        service = services.get(name, {})
+        revenue = company.get("Fatturato", "")
+        meta = " · ".join(str(x) for x in (company.get("Sede"), revenue) if not ui.is_missing(x))
+        with st.container(border=True):
+            badge, body, score = st.columns([0.09, 0.61, 0.30], gap="medium")
+            badge.markdown(ui.rank_badge(prio.get("Priorità", position)), unsafe_allow_html=True)
+            with body:
+                st.markdown(ui.company_head(name, meta), unsafe_allow_html=True)
+                hook = service.get("Aggancio al fatto") or infos.get(name, {}).get("Cosa sapere", "")
+                if not ui.is_missing(hook):
+                    st.markdown(f'<p style="margin:6px 0 0;line-height:1.5">{ui.esc(hook)}</p>', unsafe_allow_html=True)
+                chip_items = [(service.get("Servizio principale", ""), False),
+                              (service.get("Servizio secondario", ""), False)]
+                chip_items = [(t, w) for t, w in chip_items if not ui.is_missing(t)]
+                if ui.looks_estimated(revenue):
+                    chip_items.append(("Fatturato stimato, da verificare", True))
+                st.markdown(ui.chips(chip_items), unsafe_allow_html=True)
+                reasons = details.get(name)
+                if reasons:
+                    with st.expander("Perché questa priorità"):
+                        for key in ("Cambiamento", "Accessibilità", "Volume"):
+                            if reasons.get(key):
+                                st.markdown(f"**{key} {prio.get(key, '')}** · {ui.esc(reasons[key])}")
+                source = ui.safe_url(company.get("Fonte"))
+                if source:
+                    st.markdown(f"[Fonte]({source})")
+            with score:
+                st.markdown(ui.score_panel(
+                    [(k, prio.get(k)) for k in ("Cambiamento", "Accessibilità", "Volume")],
+                    prio.get("Totale")), unsafe_allow_html=True)
+
+
+def show_table(tables, key):
+    columns = SHEETS[list(SHEETS)[KEYS.index(key)]]
+    df = pd.DataFrame(tables.get(key, [])).reindex(columns=columns, fill_value="")
+    if df.empty:
+        st.caption("Nessun dato verificabile disponibile per questa sezione.")
+    else:
+        st.dataframe(df, width="stretch", hide_index=True)
+
+
+def show_priority_chart(tables):
+    chart_rows = [
+        {"Azienda": str(r.get("Azienda", "")), "Punteggio CXI": int(r["Totale"])}
+        for r in tables.get("priorita", [])
+        if isinstance(r.get("Totale"), (int, float)) and r.get("Azienda")
+    ]
+    if chart_rows:
+        st.markdown("**Punteggio commerciale CXI (massimo 9)**")
+        chart_df = pd.DataFrame(chart_rows).set_index("Azienda")
+        st.bar_chart(chart_df, horizontal=True, x_label="Punteggio", y_label="Azienda",
+                     color=ui.THEME["primary"])
+
+
 def show_feedback(item):
     """Valutazioni per singola ricerca, salvate nel database se configurato."""
-    st.divider()
-    st.subheader("⭐ Valuta questa ricerca")
-    st.caption("Da 1 stella (scarso) a 5 stelle (ottimo).")
     criteria = (
-        ("aziende", "Aziende trovate: quanto sono pertinenti?"),
-        ("dati", "Qualità dei dati: quanto sono completi e affidabili?"),
-        ("utilita", "Utilità commerciale: quanto sono utili priorità e suggerimenti?"),
+        ("aziende", "Aziende pertinenti"),
+        ("dati", "Qualità dei dati"),
+        ("utilita", "Utilità commerciale"),
     )
     existing = item.get("feedback")
-    if existing:
-        st.success("Feedback salvato per questa ricerca. Puoi aggiornarlo qui sotto.")
-    ratings = {}
-    for key, label in criteria:
-        st.markdown(f"**{label}**")
-        widget_key = f"feedback_{item['id']}_{key}"
-        if existing and widget_key not in st.session_state:
-            st.session_state[widget_key] = int(existing[key]) - 1
-        selection = st.feedback("stars", key=widget_key)
-        ratings[key] = selection + 1 if selection is not None else None
-    if st.button("💾 Invia feedback", key=f"save_feedback_{item['id']}"):
-        if any(value is None for value in ratings.values()):
-            st.warning("Seleziona da 1 a 5 stelle per tutti e tre i criteri.")
-        else:
-            item["feedback"] = ratings
-            item["feedback_at"] = datetime.now().strftime("%d/%m/%Y %H:%M")
-            if db_enabled():
-                try:
-                    save_feedback(item)
-                    st.success("Grazie! Feedback salvato.")
-                except AuthExpired:
-                    st.error("Sessione scaduta: esci e accedi di nuovo per salvare il feedback.")
-                except requests.RequestException as exc:
-                    print(f"DATABASE feedback non salvato: {type(exc).__name__}", flush=True)
-                    st.error("Feedback non salvato nell'archivio. Riprova più tardi.")
+    with st.container(border=True):
+        intro, *stars = st.columns([1.3, 1, 1, 1], gap="medium")
+        with intro:
+            st.markdown("#### Com'è andata questa ricerca?")
+            st.markdown('<p class="sp-muted">Le valutazioni servono a misurare la qualità dell\'agent.</p>',
+                        unsafe_allow_html=True)
+        ratings = {}
+        for col, (key, label) in zip(stars, criteria):
+            with col:
+                st.markdown(f"**{label}**")
+                widget_key = f"feedback_{item['id']}_{key}"
+                if existing and widget_key not in st.session_state:
+                    st.session_state[widget_key] = int(existing[key]) - 1
+                selection = st.feedback("stars", key=widget_key)
+                ratings[key] = selection + 1 if selection is not None else None
+        if existing:
+            st.caption("Valutazione già salvata: puoi aggiornarla.")
+        if st.button("Invia valutazione", type="primary", key=f"save_feedback_{item['id']}"):
+            if any(value is None for value in ratings.values()):
+                st.warning("Seleziona da 1 a 5 stelle per tutti e tre i criteri.")
             else:
-                st.success("Feedback registrato per questa sessione.")
+                item["feedback"] = ratings
+                item["feedback_at"] = datetime.now().strftime("%d/%m/%Y %H:%M")
+                if db_enabled():
+                    try:
+                        save_feedback(item)
+                        st.success("Grazie! Valutazione salvata.")
+                    except AuthExpired:
+                        st.error("Sessione scaduta: esci e accedi di nuovo per salvare la valutazione.")
+                    except requests.RequestException as exc:
+                        print(f"DATABASE feedback non salvato: {type(exc).__name__}", flush=True)
+                        st.error("Valutazione non salvata nell'archivio. Riprova più tardi.")
+                else:
+                    st.success("Valutazione registrata per questa sessione.")
 
 
 def show_result(item):
-    st.caption(f"Ricerca del {item['date']} · {item['mode']}")
+    meta = f"Ricerca del {item['date']}"
     if "duration_seconds" in item:
-        st.caption(f"⏱️ {'Tentativo terminato' if item.get('error') else 'SalesPilot ha risposto'} in {format_duration(item['duration_seconds'])}")
-    st.markdown(f"**Richiesta:** {item['query']}")
+        meta += f" · {'terminata' if item.get('error') else 'completata'} in {format_duration(item['duration_seconds'])}"
+    head, action = st.columns([0.78, 0.22], vertical_alignment="bottom")
+    with head:
+        st.markdown(f'<p class="sp-muted" style="margin:0">{ui.esc(meta)}</p>', unsafe_allow_html=True)
+        st.markdown(f"### {ui.esc(item['query'])}")
     if item.get("error"):
         st.error(item["error"])
         return
-    st.markdown(item.get("summary", ""))
-    notice = completeness_message(item["query"], item["tables"])
+    tables = item["tables"]
+    with action:
+        st.download_button("Scarica Excel", data=excel_bytes(tables), width="stretch",
+                           file_name=f"salespilot_ricerca_{item['id']}.xlsx",
+                           mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                           key=f"export_{item['id']}")
+    notice = completeness_message(item["query"], tables)
     if notice:
         st.warning(notice)
-    for idx, ((_, columns), key, title) in enumerate(zip(SHEETS.items(), KEYS, TITLES), 1):
-        number = "4.1" if key == "contatti" else ("5" if key == "servizi_cxi" else str(idx))
-        st.subheader(f"{number}. {title}")
-        df = pd.DataFrame(item["tables"].get(key, [])).reindex(columns=columns, fill_value="")
-        st.dataframe(df, width="stretch", hide_index=True)
-        if key == "contatti":
-            st.caption("🔒 Privacy: i contatti indicati provengono da fonti professionali pubbliche. Sono riportati solo nome, ruolo e link pertinenti alla ricerca B2B. Prima di utilizzarli per finalità commerciali, verificare la base giuridica e gli obblighi privacy applicabili.")
-        if df.empty:
-            st.caption("Nessun dato verificabile disponibile per questa sezione.")
-    show_dashboard(item["tables"])
-    show_company_maps(item["tables"])
-    st.download_button("📥 Scarica Excel delle 6 tabelle", data=excel_bytes(item["tables"]),
-                       file_name=f"salespilot_ricerca_{item['id']}.xlsx",
-                       mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                       key=f"export_{item['id']}")
+    show_kpis(item)
+    if item.get("summary"):
+        with st.expander("Sintesi della ricerca"):
+            st.markdown(item["summary"])
+    tabs = st.tabs(["Panoramica", "New names", "Priorità", "Info aziende", "Buyer persona",
+                    "Contatti", "Servizi CXI", "Mappa"])
+    with tabs[0]:
+        show_company_cards(tables)
+    with tabs[1]:
+        show_table(tables, "new_names")
+    with tabs[2]:
+        show_table(tables, "priorita")
+        show_priority_chart(tables)
+    with tabs[3]:
+        show_table(tables, "informazioni")
+    with tabs[4]:
+        show_table(tables, "buyer_persona")
+    with tabs[5]:
+        show_table(tables, "contatti")
+        st.caption(PRIVACY_CONTACTS_NOTE)
+    with tabs[6]:
+        show_table(tables, "servizi_cxi")
+    with tabs[7]:
+        show_company_maps(tables)
     show_feedback(item)
 
+
+def _use_example(text):
+    st.session_state.query_text = text
+
+
+def show_home():
+    st.markdown("# Chi stai cercando?")
+    st.markdown('<p class="sp-muted" style="font-size:16px">Descrivi il target in poche righe: settore, area, '
+                'dimensione e quante aziende vuoi. Più dettagli dai, più i risultati sono precisi.</p>',
+                unsafe_allow_html=True)
+    with st.form("search", border=True):
+        query = st.text_area("Descrizione del target", key="query_text", height=110,
+                             placeholder="Es. Trova 5 gruppi di concessionarie auto in Piemonte o Lombardia "
+                                         "con fatturato oltre 300 milioni di euro")
+        left, right = st.columns([0.7, 0.3], vertical_alignment="center")
+        left.markdown('<span class="sp-muted">⏱ Di solito richiede 2–3 minuti</span>', unsafe_allow_html=True)
+        submitted = right.form_submit_button("Cerca new names", type="primary", width="stretch")
+    st.markdown("**Prova con un esempio**")
+    for col, (sector, text) in zip(st.columns(len(EXAMPLES)), EXAMPLES):
+        col.button(f"**{sector}**  \n{text}", key=f"example_{sector}", width="stretch",
+                   on_click=_use_example, args=(text,))
+    st.markdown('<div class="sp-note">Non inserire nelle ricerche dati personali o informazioni riservate. '
+                'I risultati sono generati da AI e vanno verificati prima dell\'uso commerciale.</div>',
+                unsafe_allow_html=True)
+    if db_enabled():
+        try:
+            stats = feedback_stats()
+            if stats and int(stats.get("numero_feedback") or 0):
+                st.caption(f"⭐ Le tue valutazioni medie · Aziende {float(stats['media_aziende']):.1f}/5 · "
+                           f"Dati {float(stats['media_dati']):.1f}/5 · "
+                           f"Utilità {float(stats['media_utilita']):.1f}/5 "
+                           f"({int(stats['numero_feedback'])} valutazioni)")
+        except AuthExpired:
+            handle_expired_session()
+        except (requests.RequestException, TypeError, ValueError, KeyError) as exc:
+            print(f"DATABASE statistiche non disponibili: {type(exc).__name__}", flush=True)
+    return query.strip() if submitted and query and query.strip() else None
+
+
+def run_search(query):
+    # Suffisso casuale: l'id è univoco anche fra utenti diversi nello stesso istante.
+    uid = datetime.now().strftime("%Y%m%d_%H%M%S_%f") + "_" + uuid.uuid4().hex[:8]
+    item = {"id": uid, "date": datetime.now().strftime("%d/%m/%Y %H:%M"), "query": query, "mode": "Gemini (API)"}
+    started_at = time.perf_counter()
+    try:
+        with st.spinner("SalesPilot sta cercando le aziende: di solito servono 2–3 minuti..."):
+            item["summary"], item["tables"] = gemini_results(query)
+    except Exception as exc:
+        error_text = str(exc)
+        if re.search(r"(?:HTTP\s*)?(?:503|502|504)\b", error_text):
+            item["error"] = "Sistema temporaneamente sovraccarico. Riprova tra qualche minuto."
+        elif re.search(r"(?:HTTP\s*)?429\b", error_text):
+            item["error"] = "Servizio temporaneamente occupato o limite di richieste raggiunto. Riprova tra qualche minuto."
+        else:
+            item["error"] = f"Ricerca non completata: {exc}"
+    finally:
+        item["duration_seconds"] = time.perf_counter() - started_at
+    st.session_state.history.append(item)
+    st.session_state.history = st.session_state.history[-MAX_HISTORY:]
+    st.session_state.selected_id = uid
+    if db_enabled():
+        try:
+            save_search(item)
+        except AuthExpired:
+            st.session_state.save_notice = ("Sessione scaduta: la ricerca è visibile ora, ma non è stata salvata "
+                                            "nell'archivio. Esci e accedi di nuovo.")
+        except requests.RequestException as exc:
+            print(f"DATABASE ricerca non salvata: {type(exc).__name__}", flush=True)
+            st.session_state.save_notice = "Ricerca completata, ma non salvata nell'archivio permanente."
+    st.rerun()
+
+
+def _history_label(item):
+    count = len(item.get("tables", {}).get("new_names", [])) if not item.get("error") else 0
+    detail = f"{item['date']} · {count} aziende" if count else f"{item['date']} · non riuscita" \
+        if item.get("error") else item["date"]
+    text = item["query"] if len(item["query"]) <= 42 else item["query"][:40].rstrip() + "…"
+    return f"**{text}**  \n{detail}"
+
+
 with st.sidebar:
-    st.header("SalesPilot · Beta")
-    if db_enabled() and current_user_id():
-        st.caption(f"Accesso come **{html.escape(st.session_state.auth.get('email', ''))}**")
-    if st.button("➕ Nuova ricerca", width="stretch"):
+    st.markdown(ui.brand_header(), unsafe_allow_html=True)
+    if st.button("＋ Nuova ricerca", type="primary", width="stretch"):
         st.session_state.selected_id = None
         st.rerun()
-    st.divider()
-    st.subheader("Cronologia ricerche")
-    st.caption(f"Ultime {MAX_HISTORY} ricerche" + (" del tuo archivio" if db_enabled() else " della sessione"))
+    st.markdown('<p class="sp-label">Ultime ricerche</p>', unsafe_allow_html=True)
+    if not st.session_state.history:
+        st.caption("Nessuna ricerca ancora.")
     for item in reversed(st.session_state.history):
-        label = f"{item['date']} · {item['query'][:38]}"
-        if st.button(label, key=f"history_{item['id']}", width="stretch"):
+        if st.button(_history_label(item), key=f"history_{item['id']}", width="stretch"):
             st.session_state.selected_id = item["id"]
             st.rerun()
     if st.session_state.history:
         if not st.session_state.get("confirm_clear", False):
-            if st.button("🗑️ Cancella cronologia", width="stretch"):
+            if st.button("🗑 Cancella cronologia", width="stretch"):
                 st.session_state.confirm_clear = True
                 st.rerun()
         else:
@@ -1270,25 +1481,12 @@ with st.sidebar:
                 st.session_state.confirm_clear = False
                 st.rerun()
     st.divider()
+    if db_enabled() and current_user_id():
+        st.caption(ui.esc(st.session_state.auth.get("email", "")))
     if st.button("Esci", width="stretch"):
         sign_out()
         st.rerun()
-
-st.title("SalesPilot")
-st.caption("Ricerca prospect B2B · prioritizzazione · suggerimenti commerciali")
-st.info("Prototipo universitario: verifica aziende, fatturati, contatti e fonti prima dell'uso commerciale.")
-if db_enabled():
-    try:
-        stats = feedback_stats()
-        if stats and int(stats.get("numero_feedback") or 0):
-            st.caption(f"⭐ Feedback medi · Aziende: {float(stats['media_aziende']):.1f}/5 · "
-                       f"Dati: {float(stats['media_dati']):.1f}/5 · "
-                       f"Utilità commerciale: {float(stats['media_utilita']):.1f}/5 "
-                       f"({int(stats['numero_feedback'])} valutazioni)")
-    except AuthExpired:
-        handle_expired_session()
-    except (requests.RequestException, TypeError, ValueError, KeyError) as exc:
-        print(f"DATABASE statistiche non disponibili: {type(exc).__name__}", flush=True)
+    show_legal_footer()
 
 save_notice = st.session_state.pop("save_notice", None)
 if save_notice:
@@ -1298,37 +1496,6 @@ selected = next((x for x in st.session_state.history if x["id"] == st.session_st
 if selected:
     show_result(selected)
 else:
-    st.markdown("Inserisci una nuova richiesta. Ogni ricerca è indipendente dalle precedenti.")
-
-query = st.chat_input("Es. Trova 5 gruppi di concessionarie auto in Piemonte o Lombardia con fatturato >300 milioni...")
-if query and query.strip():
-    # Suffisso casuale: l'id è univoco anche fra utenti diversi nello stesso istante.
-    uid = datetime.now().strftime("%Y%m%d_%H%M%S_%f") + "_" + uuid.uuid4().hex[:8]
-    item = {"id": uid, "date": datetime.now().strftime("%d/%m/%Y %H:%M"), "query": query.strip(), "mode": "Gemini (API)"}
-    started_at = time.perf_counter()
-    try:
-        with st.spinner("Gemini sta elaborando la ricerca..."):
-            item["summary"], item["tables"] = gemini_results(query.strip())
-    except Exception as exc:
-        error_text = str(exc)
-        if re.search(r"(?:HTTP\s*)?(?:503|502|504)\b", error_text):
-            item["error"] = "Sistema temporaneamente sovraccarico. Riprova tra qualche minuto."
-        elif re.search(r"(?:HTTP\s*)?429\b", error_text):
-            item["error"] = "Servizio temporaneamente occupato o limite di richieste raggiunto. Riprova tra qualche minuto."
-        else:
-            item["error"] = f"Ricerca non completata: {exc}"
-    finally:
-        item["duration_seconds"] = time.perf_counter() - started_at
-    st.session_state.history.append(item)
-    st.session_state.history = st.session_state.history[-MAX_HISTORY:]
-    st.session_state.selected_id = uid
-    if db_enabled():
-        try:
-            save_search(item)
-        except AuthExpired:
-            st.session_state.save_notice = ("Sessione scaduta: la ricerca è visibile ora, ma non è stata salvata "
-                                            "nell'archivio. Esci e accedi di nuovo.")
-        except requests.RequestException as exc:
-            print(f"DATABASE ricerca non salvata: {type(exc).__name__}", flush=True)
-            st.session_state.save_notice = "Ricerca completata, ma non salvata nell'archivio permanente."
-    st.rerun()
+    new_query = show_home()
+    if new_query:
+        run_search(new_query)
