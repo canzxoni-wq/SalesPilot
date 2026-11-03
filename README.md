@@ -24,7 +24,7 @@ Se sono configurate le variabili Supabase, prevale la modalità con account indi
 
 1. Crea un progetto su supabase.com.
 2. Nel **SQL Editor** esegui il file `supabase/schema.sql`: crea la tabella `salespilot_searches`, le regole di sicurezza e la vista `salespilot_feedback_stats`.
-3. In **Authentication → URL Configuration** imposta **Site URL** all'indirizzo pubblico dell'app su Render. Il link nell'email di conferma della registrazione porta lì.
+3. In **Authentication → URL Configuration** imposta **Site URL** all'indirizzo pubblico dell'app su Render e aggiungi in **Redirect URLs** lo stesso indirizzo seguito da `/**` (es. `https://salespilot.onrender.com/**`). Dopo il clic sul link di conferma, l'utente torna all'app e vede il messaggio "account verificato".
 4. Copia **Project URL** e chiave **anon/publishable** (Project Settings → API Keys).
 
 ## Pubblicazione su Render
@@ -35,6 +35,7 @@ Se sono configurate le variabili Supabase, prevale la modalità con account indi
    - `TAVILY_API_KEY`: chiave della ricerca web Tavily
    - `SUPABASE_URL` e `SUPABASE_ANON_KEY`: per gli account individuali
    - in alternativa `SALESPILOT_USERNAME` e `SALESPILOT_PASSWORD`: per l'accesso condiviso
+   - `APP_URL`: facoltativa, indirizzo pubblico dell'app (altrimenti viene ricavato in automatico)
    - `GEMINI_MODEL`: facoltativa, predefinita `gemini-3.1-flash-lite`
 3. Esegui il deploy e apri l'indirizzo pubblico fornito da Render.
 

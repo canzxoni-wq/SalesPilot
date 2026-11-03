@@ -20,6 +20,9 @@ services:
         sync: false
       - key: SUPABASE_ANON_KEY
         sync: false
+      # Facoltativa: indirizzo pubblico dell'app, per il ritorno dal link di conferma email
+      - key: APP_URL
+        sync: false
       # Alternativa senza Supabase: accesso con credenziali condivise
       - key: SALESPILOT_USERNAME
         sync: false

@@ -100,9 +100,27 @@ def sign_in(email, password):
     return None
 
 
+def app_base_url():
+    """Indirizzo pubblico dell'app (es. https://salespilot.onrender.com), senza percorso né parametri."""
+    configured = os.getenv("APP_URL", "").strip().rstrip("/")
+    if configured:
+        return configured
+    try:
+        parsed = urlparse(str(st.context.url or ""))
+        if parsed.scheme and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    except (AttributeError, TypeError, ValueError):
+        pass
+    return ""
+
+
 def sign_up(email, password):
     """Restituisce (errore, messaggio informativo)."""
-    response = _auth_call("signup", {"email": email, "password": password})
+    # Dopo il clic sul link di conferma, Supabase riporta l'utente all'app con
+    # ?verificato=1, così l'app può mostrare "account verificato".
+    base = app_base_url()
+    path = f"signup?redirect_to={quote(base + '/?verificato=1', safe='')}" if base else "signup"
+    response = _auth_call(path, {"email": email, "password": password})
     if not response.ok:
         return _auth_error_message(response), None
     data = response.json()
@@ -198,6 +216,8 @@ def handle_expired_session():
 
 def show_login():
     st.title("SalesPilot · Accesso")
+    if st.session_state.pop("just_verified", False):
+        st.success("✅ Il tuo account è stato verificato. Ora puoi accedere con la tua email e password.")
     notice = st.session_state.pop("auth_notice", None)
     if notice:
         st.info(notice)
@@ -260,6 +280,15 @@ if not db_enabled() and (not USERNAME or not PASSWORD or PASSWORD == "CAMBIA_QUE
     st.error("Configura SUPABASE_URL e SUPABASE_ANON_KEY (account individuali) oppure "
              "SALESPILOT_USERNAME e SALESPILOT_PASSWORD (accesso condiviso) nelle variabili d'ambiente di Render.")
     st.stop()
+
+# Ritorno dal link di conferma email (vedi sign_up): mostra il messaggio una
+# volta e ripulisce l'indirizzo.
+if st.query_params.get("verificato") == "1":
+    st.session_state.just_verified = True
+    del st.query_params["verificato"]
+    if st.session_state.get("authenticated", False):
+        st.toast("✅ Il tuo account è stato verificato.")
+        st.session_state.just_verified = False
 
 if not st.session_state.get("authenticated", False):
     show_login()
