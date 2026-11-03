@@ -6,23 +6,29 @@ Tutti i testi provenienti da AI o fonti web passano da esc() prima di finire
 nell'HTML, per evitare che contenuti esterni inseriscano codice nella pagina.
 """
 import html
+import os
 import re
 from urllib.parse import urlparse
 
+LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo-icon.png")
+
 THEME = {
-    "primary": "#087F8C",       # pulsanti, link, barre dei punteggi
-    "primary_dark": "#05606A",  # hover dei pulsanti
-    "deep": "#0B3A44",          # pannello di accesso, badge della classifica
-    "deep_text": "#CFE3E6",     # testo secondario sul colore deep
-    "accent_light": "#7FD6DE",  # icone sul colore deep
-    "ink": "#102A33",           # testo principale
-    "muted": "#4A5F66",         # testo secondario (contrasto AA su bianco)
-    "bg": "#F6F7F7",            # sfondo della pagina
+    # Palette ricavata dal sito di Customer Experience Italia (pagina Digital X)
+    "primary": "#25CAD2",       # azzurro CXI: pulsanti, barre dei punteggi, evidenze
+    "primary_dark": "#1DB3BA",  # hover dei pulsanti
+    "on_primary": "#102256",    # testo sopra l'azzurro (il bianco non avrebbe contrasto sufficiente)
+    "primary_text": "#0B6F78",  # azzurro scuro per testi e chip su fondo chiaro (contrasto AA)
+    "deep": "#102256",          # blu notte CXI: pannello di accesso, badge della classifica
+    "deep_text": "#C9D3EE",     # testo secondario sul blu notte
+    "accent_light": "#25CAD2",  # azzurro sul blu notte
+    "ink": "#0E1B3D",           # testo principale
+    "muted": "#4A5573",         # testo secondario (contrasto AA su bianco)
+    "bg": "#F5F7FB",            # sfondo della pagina
     "surface": "#FFFFFF",       # schede e barra laterale
-    "border": "#DCE4E6",        # bordi
-    "soft": "#E6F3F4",          # sfondo di chip ed elemento selezionato
-    "warn_bg": "#FFF6E5",
-    "warn_ink": "#6B4A00",
+    "border": "#DDE3EE",        # bordi
+    "soft": "#E3F7F8",          # sfondo di chip ed elemento selezionato
+    "warn_bg": "#FFF3E6",
+    "warn_ink": "#7A4200",
 }
 
 
@@ -52,22 +58,55 @@ def global_css():
 header[data-testid="stHeader"] {{ background: transparent; }}
 [data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapsedControl"] {{ visibility: visible; display: flex; }}
 h1, h2, h3 {{ color: {t['ink']}; letter-spacing: -0.015em; }}
+a, a:visited {{ color: {t['primary_text']}; }}
+button[kind^="primary"], button[kind^="primary"] p {{ color: {t['on_primary']} !important; font-weight: 600; }}
+button[kind^="primary"] {{ background: {t['primary']} !important; border-color: {t['primary']} !important; }}
+button[kind^="primary"]:hover {{ background: {t['primary_dark']} !important; border-color: {t['primary_dark']} !important; }}
 [data-testid="stSidebar"] {{ background: {t['surface']}; border-right: 1px solid {t['border']}; }}
-[data-testid="stSidebar"] .stButton button {{ justify-content: flex-start; text-align: left; border-color: transparent; background: transparent;
-  width: 100%; min-height: 38px; padding: 6px 10px; }}
-[data-testid="stSidebar"] .stButton button > div,
-[data-testid="stSidebar"] .stButton button [data-testid="stMarkdownContainer"] {{ min-width: 0; max-width: 100%; width: 100%; justify-content: flex-start; text-align: left; }}
-[data-testid="stSidebar"] .stButton button[kind="primary"] > div,
-[data-testid="stSidebar"] .stButton button[kind="primary"] [data-testid="stMarkdownContainer"],
-[data-testid="stSidebar"] .stButton button[kind="primary"] p {{ justify-content: center; text-align: center; }}
-[data-testid="stSidebar"] .stButton button p {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; margin: 0; }}
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 0.35rem; }}
-[data-testid="stSidebar"] .stTextInput input {{ min-height: 38px; }}
-[data-testid="stSidebar"] .stButton button:hover {{ background: {t['soft']}; border-color: transparent; color: {t['ink']}; }}
-[data-testid="stSidebar"] .stButton button[kind="primary"] {{ justify-content: center; background: {t['primary']}; color: #FFFFFF; }}
-[data-testid="stSidebar"] .stButton button[kind="primary"]:hover {{ background: {t['primary_dark']}; color: #FFFFFF; }}
+[data-testid="stSidebar"] [data-testid="stSidebarContent"] {{ display: flex; flex-direction: column; }}
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{ padding-top: 0.5rem; }}
+/* Il blocco principale della barra occupa tutta l'altezza: l'account resta in fondo, come nelle app di chat. */
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"]:has(.st-key-account_box):not(.st-key-account_box) {{ min-height: calc(100vh - 7rem); }}
+[data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 2px; }}
+/* Voci di navigazione e cronologia: righe a tutta larghezza, testo a sinistra su una riga */
+[data-testid="stSidebar"] .stButton button[kind="tertiary"] {{ width: 100%; min-height: 36px; padding: 6px 10px; border-radius: 8px;
+  justify-content: flex-start; color: {t['ink']}; font-weight: 500; }}
+[data-testid="stSidebar"] .stButton button[kind="tertiary"]:hover {{ background: {t['soft']}; color: {t['ink']}; }}
+[data-testid="stSidebar"] .stButton button[kind="tertiary"] > div,
+[data-testid="stSidebar"] .stButton button[kind="tertiary"] [data-testid="stMarkdownContainer"] {{ min-width: 0; width: 100%; justify-content: flex-start; text-align: left; }}
+[data-testid="stSidebar"] .stButton button[kind="tertiary"] p {{ white-space: nowrap; overflow: hidden; text-overflow: ellipsis; text-align: left; margin: 0; font-size: 14px; }}
+[data-testid="stSidebar"] .stButton button[kind="tertiary"] [data-testid="stIconMaterial"] {{ color: {t['muted']}; font-size: 20px; }}
+[data-testid="stSidebar"] .stTextInput input {{ min-height: 36px; }}
+[data-testid="stSidebar"] .stPopover button {{ min-height: 36px; border-color: transparent; background: transparent; }}
+.sp-sidebar-spacer {{ flex: 1; min-height: 24px; }}
+[data-testid="stLayoutWrapper"]:has(> .st-key-account_box) {{ margin-top: auto; }}
+.st-key-account_box {{ border-top: 1px solid {t['border']}; padding-top: 10px; }}
+[data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {{ margin-bottom: 0 !important; }}
+.sp-label {{ display: block; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: {t['muted']};
+  padding: 14px 10px 2px; line-height: 1.4; }}
+.sp-group {{ display: block; font-size: 12px; font-weight: 600; color: {t['muted']}; padding: 8px 10px 2px; line-height: 1.4; }}
+.sp-steps {{ list-style: none; margin: 4px 0 0; padding: 0; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }}
+.sp-steps li {{ display: flex; align-items: center; gap: 8px; color: {t['muted']}; }}
+.sp-steps li.done {{ color: {t['ink']}; }}
+.sp-steps li.now {{ color: {t['ink']}; font-weight: 600; }}
+.sp-dot {{ width: 8px; height: 8px; border-radius: 50%; background: {t['primary']}; animation: sp-pulse 1s ease-in-out infinite; }}
+@keyframes sp-pulse {{ 0%, 100% {{ opacity: 0.35; }} 50% {{ opacity: 1; }} }}
+.sp-user {{ display: flex; align-items: center; gap: 10px; min-width: 0; }}
+.sp-avatar {{ flex: none; width: 32px; height: 32px; border-radius: 50%; background: {t['deep']}; color: #FFFFFF; font-size: 12px; font-weight: 700;
+  display: flex; align-items: center; justify-content: center; }}
+.sp-user-text {{ display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }}
+.sp-user-text strong {{ font-size: 13px; color: {t['ink']}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
+.sp-user-text span {{ font-size: 12px; color: {t['muted']}; }}
+.sp-table-wrap {{ overflow-x: auto; border: 1px solid {t['border']}; border-radius: 12px; background: {t['surface']}; }}
+.sp-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
+.sp-table th {{ text-align: left; padding: 10px 12px; background: {t['bg']}; color: {t['muted']}; font-size: 13px; font-weight: 600;
+  border-bottom: 1px solid {t['border']}; white-space: nowrap; }}
+.sp-table td {{ padding: 10px 12px; border-bottom: 1px solid {t['border']}; vertical-align: top; color: {t['ink']}; line-height: 1.45;
+  min-width: 120px; max-width: 420px; overflow-wrap: anywhere; }}
+.sp-table tr:last-child td {{ border-bottom: 0; }}
+.sp-dim {{ color: {t['muted']}; }}
 .stButton button[kind="primary"], .stFormSubmitButton button[kind="primary"],
-.stDownloadButton button[kind="primary"] {{ background: {t['primary']}; border-color: {t['primary']}; color: #FFFFFF; min-height: 46px; font-weight: 600; }}
+.stDownloadButton button[kind="primary"] {{ background: {t['primary']}; border-color: {t['primary']}; color: {t['on_primary']}; min-height: 46px; font-weight: 600; }}
 .stButton button[kind="primary"]:hover, .stFormSubmitButton button[kind="primary"]:hover {{ background: {t['primary_dark']}; border-color: {t['primary_dark']}; }}
 [data-testid="stVerticalBlockBorderWrapper"] {{ background: {t['surface']}; border-radius: 14px; }}
 [data-testid="stMetric"] {{ padding: 2px 4px; }}
@@ -79,7 +118,6 @@ h1, h2, h3 {{ color: {t['ink']}; letter-spacing: -0.015em; }}
 .sp-brand {{ display: flex; align-items: center; gap: 10px; margin: 0 0 16px; }}
 .sp-brand-mark {{ width: 34px; height: 34px; border-radius: 9px; background: {t['deep']}; display: flex; align-items: center; justify-content: center; }}
 .sp-brand-name {{ font-size: 19px; font-weight: 700; color: {t['ink']}; }}
-.sp-label {{ font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: {t['muted']}; margin: 6px 0 2px; }}
 .sp-muted {{ color: {t['muted']}; font-size: 14px; }}
 .sp-rank {{ width: 56px; height: 56px; border-radius: 12px; display: flex; flex-direction: column; align-items: center; justify-content: center; }}
 .sp-rank span {{ font-size: 11px; font-weight: 600; }}
@@ -87,7 +125,7 @@ h1, h2, h3 {{ color: {t['ink']}; letter-spacing: -0.015em; }}
 .sp-company {{ font-size: 20px; font-weight: 700; color: {t['ink']}; margin: 0; }}
 .sp-company-meta {{ font-size: 14px; color: {t['muted']}; }}
 .sp-chips {{ display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 4px; }}
-.sp-chip {{ padding: 4px 10px; border-radius: 999px; background: {t['soft']}; color: {t['primary_dark']}; font-size: 13px; font-weight: 600; }}
+.sp-chip {{ padding: 4px 10px; border-radius: 999px; background: {t['soft']}; color: {t['primary_text']}; font-size: 13px; font-weight: 600; }}
 .sp-chip-warn {{ background: {t['warn_bg']}; color: {t['warn_ink']}; }}
 .sp-score-head {{ display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 8px; }}
 .sp-score-head span {{ font-size: 13px; font-weight: 600; color: {t['muted']}; }}
@@ -121,12 +159,51 @@ def _wordmark(sales_color, pilot_color, size=19):
 
 
 def brand_header():
-    return (f'<div class="sp-brand">{logo_icon(34)}{_wordmark(THEME["ink"], THEME["primary"])}</div>')
+    return (f'<div class="sp-brand" style="padding:0 6px">{logo_icon(36)}{_wordmark(THEME["ink"], THEME["primary_text"], 21)}</div>')
+
+
+def user_card(email):
+    email = str(email or "")
+    initials = (email[:2] if email else "SP").upper()
+    return (f'<div class="sp-user"><span class="sp-avatar">{esc(initials)}</span>'
+            f'<span class="sp-user-text"><strong>{esc(email)}</strong><span>Account Manager</span></span></div>')
+
+
+def _cell(value):
+    text = str(value if value is not None else "")
+    url = safe_url(text)
+    if url:
+        label = urlparse(url).netloc.replace("www.", "") or "link"
+        return f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(label)}</a>'
+    return esc(text) if text.strip() else '<span class="sp-dim">–</span>'
+
+
+def steps_list(steps, running=True):
+    """Fasi della ricerca: completate con ✓, quella in corso con un punto che pulsa."""
+    items = []
+    for i, text in enumerate(steps):
+        last = i == len(steps) - 1
+        if last and running:
+            items.append(f'<li class="now"><span class="sp-dot"></span>{esc(text)}…</li>')
+        else:
+            items.append(f'<li class="done">✓ {esc(text)}</li>')
+    return f'<ul class="sp-steps">{"".join(items)}</ul>'
+
+
+HIDE_STALE_CSS = ("<style>[data-testid=\"stMain\"] [data-stale=\"true\"] { display: none !important; }</style>")
+
+
+def html_table(rows, columns):
+    """Tabella con testo a capo: ogni colonna è leggibile per intero."""
+    head = "".join(f"<th>{esc(c)}</th>" for c in columns)
+    body = "".join("<tr>" + "".join(f"<td>{_cell(r.get(c))}</td>" for c in columns) + "</tr>" for r in rows)
+    return (f'<div class="sp-table-wrap"><table class="sp-table"><thead><tr>{head}</tr></thead>'
+            f'<tbody>{body}</tbody></table></div>')
 
 
 def login_panel():
     return f"""<div class="sp-login-panel">
-<div class="sp-brand">{logo_icon(40, bg=THEME['primary'], top='#FFFFFF')}{_wordmark('#FFFFFF', THEME['accent_light'], 22)}</div>
+<div class="sp-brand" style="gap:16px">{logo_icon(68, bg=THEME['primary'], top=THEME['deep'], bars=THEME['deep'])}{_wordmark('#FFFFFF', THEME['accent_light'], 40)}</div>
 <h1>Dal target ai clienti da contattare, con le fonti.</h1>
 <p>Descrivi il tipo di azienda che cerchi. SalesPilot trova i new names, li ordina per priorità e suggerisce i servizi CXI più adatti.</p>
 <ul>
@@ -140,9 +217,9 @@ def login_panel():
 
 def rank_badge(position):
     top = position <= 2
-    bg = THEME["deep"] if top else "#E1E7E8"
+    bg = THEME["deep"] if top else "#E4E8F1"
     fg = "#FFFFFF" if top else THEME["ink"]
-    sub = "#9CC3C9" if top else THEME["muted"]
+    sub = THEME["deep_text"] if top else THEME["muted"]
     return (f'<div class="sp-rank" style="background:{bg};color:{fg}">'
             f'<span style="color:{sub}">N.</span><strong>{int(position)}</strong></div>')
 

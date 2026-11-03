@@ -18,9 +18,8 @@ import legal
 import ui
 
 load_dotenv()
-_LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo-icon.png")
 st.set_page_config(page_title="SalesPilot | AI Sales Agent",
-                   page_icon=_LOGO_PATH if os.path.exists(_LOGO_PATH) else "📊", layout="wide")
+                   page_icon=ui.LOGO_PATH if os.path.exists(ui.LOGO_PATH) else "📊", layout="wide")
 st.markdown(ui.global_css(), unsafe_allow_html=True)
 
 USERNAME = os.getenv("SALESPILOT_USERNAME") or os.getenv("CXI_USERNAME", "")
@@ -896,9 +895,14 @@ def score_companies(tables, query, volumes=None):
     return tables
 
 
-def gemini_results(query):
+def gemini_results(query, progress=None):
+    """progress: funzione facoltativa chiamata con la descrizione di ogni fase (per l'interfaccia)."""
+    def step(text):
+        if progress:
+            progress(text)
     if not API_KEY:
         raise ValueError("Manca GEMINI_API_KEY nelle variabili d'ambiente di Render")
+    step("Cerco aziende e fonti sul web")
     web_results, web_note = tavily_search(query)
     # Ricerca di aziende PRIMA dei contatti. Un secondo insieme di risultati
     # aumenta la copertura, senza introdurre aziende prive di riscontri.
@@ -974,6 +978,7 @@ REGOLE PER LE TABELLE:
 """
     url = f"https://generativelanguage.googleapis.com/v1beta/models/{MODEL}:generateContent"
     payload = {"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"temperature": 0.2, "responseMimeType": "application/json"}}
+    step("Analizzo le fonti e seleziono le aziende in target")
     response = requests.post(url, params={"key": API_KEY}, json=payload, timeout=110)
     if not response.ok:
         try:
@@ -997,6 +1002,7 @@ REGOLE PER LE TABELLE:
     # Se il primo passaggio restituisce meno aziende, ripeti UNA volta la generazione
     # con fonti aggiuntive. Non modificare la selezione in base ai contatti.
     if expected and len(tables["new_names"]) < expected and TAVILY_API_KEY:
+        step("Cerco altre aziende per arrivare al numero richiesto")
         missing = expected - len(tables["new_names"])
         already = [r["Azienda"] for r in tables["new_names"]]
         extra_sources, _ = tavily_search(query[:230] + " aziende operatori alternative elenco bilanci", max_results=10)
@@ -1026,12 +1032,16 @@ REGOLE PER LE TABELLE:
             tables[k] = [r for r in tables[k] if r.get("Azienda") in keep]
         for i, r in enumerate(tables["priorita"], 1):
             r["Priorità"] = i
+    step("Recupero i fatturati")
     revenue_note = enrich_revenue_tavily(tables)
     for row in tables["new_names"]:
         if str(row.get("Fatturato", "")).strip().casefold() in ("", "non verificato", "non individuato", "n/d"):
             row["Fatturato"] = "Dato non disponibile"
+    step("Cerco gli interlocutori aziendali")
     contacts_note = enrich_contacts_tavily(tables)
+    step("Verifico le sedi")
     enrich_company_addresses(tables)
+    step("Calcolo le priorità e il confronto con il settore")
     score_companies(tables, query, assess_volume(tables, query))
     # Il conteggio reale viene sempre dal codice, non dalla sintesi generata.
     actual = len(tables["new_names"])
@@ -1311,7 +1321,8 @@ def show_table(tables, key):
     if df.empty:
         st.caption("Nessun dato verificabile disponibile per questa sezione.")
     else:
-        st.dataframe(df, width="stretch", hide_index=True)
+        # Tabella HTML con testo a capo: tutte le colonne sono sempre leggibili per intero.
+        st.markdown(ui.html_table(df.to_dict("records"), columns), unsafe_allow_html=True)
 
 
 def show_priority_chart(tables):
@@ -1454,14 +1465,73 @@ def show_home():
     return query.strip() if submitted and query and query.strip() else None
 
 
+def show_stats():
+    st.markdown("# Statistiche")
+    st.markdown('<p class="sp-muted">Indicatori calcolati sulle tue ricerche recenti e sulle tue valutazioni.</p>',
+                unsafe_allow_html=True)
+    hist = st.session_state.history
+    ok_items = [h for h in hist if not h.get("error") and h.get("tables")]
+    durations = [h["duration_seconds"] for h in ok_items if h.get("duration_seconds")]
+    found = [len(h["tables"].get("new_names", [])) for h in ok_items]
+    cols = st.columns(4)
+    values = [
+        ("Ricerche", str(len(hist))),
+        ("Riuscite", f"{round(len(ok_items) / len(hist) * 100)}%" if hist else "–"),
+        ("Aziende per ricerca", f"{sum(found) / len(found):.1f}".replace(".", ",") if found else "–"),
+        ("Tempo medio", format_duration(sum(durations) / len(durations)) if durations else "–"),
+    ]
+    for col, (label, value) in zip(cols, values):
+        with col.container(border=True):
+            st.metric(label, value)
+    rated = [h["feedback"] for h in hist if h.get("feedback")]
+    st.markdown("#### Valutazioni")
+    if not rated:
+        st.caption("Ancora nessuna valutazione: valuta una ricerca dalla sua pagina dei risultati.")
+        return
+    cols = st.columns(3)
+    for col, (key, label) in zip(cols, (("aziende", "Aziende pertinenti"), ("dati", "Qualità dei dati"),
+                                        ("utilita", "Utilità commerciale"))):
+        vals = [int(r[key]) for r in rated if r.get(key)]
+        with col.container(border=True):
+            st.metric(label, f"{sum(vals) / len(vals):.1f} / 5".replace(".", ",") if vals else "–")
+            st.caption(f"{len(vals)} valutazioni")
+
+
 def run_search(query):
+    """Vista "in corso", come in una chat: richiesta dell'utente e fasi di lavoro dell'agent."""
+    st.markdown(ui.HIDE_STALE_CSS, unsafe_allow_html=True)  # niente pagina precedente in grigio sotto
+    st.markdown(f"## {ui.esc(short_title(query))}")
+    with st.chat_message("user", avatar=":material/person:"):
+        st.markdown(ui.esc(query))
+    with st.chat_message("assistant", avatar=ui.LOGO_PATH if os.path.exists(ui.LOGO_PATH) else None):
+        status = st.status("SalesPilot sta lavorando… di solito servono 2–3 minuti", expanded=True)
+        with status:
+            board = st.empty()
+        t0 = time.perf_counter()
+        steps = []
+
+        def progress(text):
+            steps.append(text)
+            board.markdown(ui.steps_list(steps), unsafe_allow_html=True)
+            status.update(label=f"SalesPilot sta lavorando… {int(time.perf_counter() - t0)} s",
+                          state="running", expanded=True)
+        item = _execute_search(query, progress)
+        board.markdown(ui.steps_list(steps, running=False), unsafe_allow_html=True)
+        if item.get("error"):
+            status.update(label="Ricerca non completata", state="error", expanded=True)
+        else:
+            status.update(label=f"Fatto: {len(item['tables'].get('new_names', []))} aziende trovate",
+                          state="complete")
+    st.rerun()
+
+
+def _execute_search(query, progress=None):
     # Suffisso casuale: l'id è univoco anche fra utenti diversi nello stesso istante.
     uid = datetime.now().strftime("%Y%m%d_%H%M%S_%f") + "_" + uuid.uuid4().hex[:8]
     item = {"id": uid, "date": datetime.now().strftime("%d/%m/%Y %H:%M"), "query": query, "mode": "Gemini (API)"}
     started_at = time.perf_counter()
     try:
-        with st.spinner("SalesPilot sta cercando le aziende: di solito servono 2–3 minuti..."):
-            item["summary"], item["tables"] = gemini_results(query)
+        item["summary"], item["tables"] = gemini_results(query, progress)
     except Exception as exc:
         error_text = str(exc)
         if re.search(r"(?:HTTP\s*)?(?:503|502|504)\b", error_text):
@@ -1475,6 +1545,7 @@ def run_search(query):
     st.session_state.history.append(item)
     st.session_state.history = st.session_state.history[-MAX_HISTORY:]
     st.session_state.selected_id = uid
+    st.session_state.view = "result"
     if db_enabled():
         try:
             save_search(item)
@@ -1484,7 +1555,7 @@ def run_search(query):
         except requests.RequestException as exc:
             print(f"DATABASE ricerca non salvata: {type(exc).__name__}", flush=True)
             st.session_state.save_notice = "Ricerca completata, ma non salvata nell'archivio permanente."
-    st.rerun()
+    return item
 
 
 _TITLE_LEAD = re.compile(
@@ -1509,71 +1580,104 @@ def _history_tooltip(item):
     return f"{item['query']}\n\n{item['date']} · {status}"
 
 
+def _date_group(item):
+    try:
+        day = datetime.strptime(item["date"], "%d/%m/%Y %H:%M").date()
+    except (KeyError, ValueError):
+        return "Precedenti"
+    delta = (datetime.now().date() - day).days
+    return "Oggi" if delta <= 0 else "Ieri" if delta == 1 else "Ultimi 7 giorni" if delta < 7 \
+        else "Ultimi 30 giorni" if delta < 30 else "Precedenti"
+
+
+def _go(view, selected=None):
+    st.session_state.view = view
+    st.session_state.selected_id = selected
+    st.session_state.pop("pending_query", None)
+
+
 with st.sidebar:
     st.markdown(ui.brand_header(), unsafe_allow_html=True)
-    if st.button("＋ Nuova ricerca", type="primary", width="stretch"):
-        st.session_state.selected_id = None
-        st.rerun()
-    history_filter = st.text_input("Cerca", placeholder="🔍 Cerca nelle ricerche", key="history_filter",
-                                   label_visibility="collapsed")
-    st.markdown('<p class="sp-label">Recenti</p>', unsafe_allow_html=True)
-    needle = history_filter.strip().casefold()
+    st.button("Nuova ricerca", icon=":material/edit_square:", type="tertiary", width="stretch",
+              key="nav_new", on_click=_go, args=("home",))
+    if st.button("Cerca", icon=":material/search:", type="tertiary", width="stretch", key="nav_search"):
+        st.session_state.show_filter = not st.session_state.get("show_filter", False)
+    st.button("Statistiche", icon=":material/bar_chart:", type="tertiary", width="stretch",
+              key="nav_stats", on_click=_go, args=("stats",))
+    needle = ""
+    if st.session_state.get("show_filter", False):
+        needle = st.text_input("Cerca nelle ricerche", placeholder="Cerca nelle ricerche…",
+                               key="history_filter", label_visibility="collapsed").strip().casefold()
     visible = [it for it in reversed(st.session_state.history)
                if not needle or needle in (short_title(it["query"]) + " " + it["query"]).casefold()]
+    st.markdown('<div class="sp-label">Recenti</div>', unsafe_allow_html=True)
     if not st.session_state.history:
-        st.caption("Nessuna ricerca ancora.")
+        st.caption("Le tue ricerche compariranno qui.")
     elif not visible:
         st.caption("Nessuna ricerca trovata.")
+    group = None
     for item in visible:
+        if _date_group(item) != group:
+            group = _date_group(item)
+            st.markdown(f'<div class="sp-group">{group}</div>', unsafe_allow_html=True)
         key = f"history_{item['id']}"
         if item["id"] == st.session_state.selected_id:
             st.markdown(ui.selected_history_css(key), unsafe_allow_html=True)
         label = ("⚠ " if item.get("error") else "") + short_title(item["query"])
-        if st.button(label, key=key, width="stretch", help=_history_tooltip(item)):
-            st.session_state.selected_id = item["id"]
-            st.rerun()
-    if st.session_state.history:
-        if not st.session_state.get("confirm_clear", False):
-            if st.button("🗑 Cancella cronologia", width="stretch"):
-                st.session_state.confirm_clear = True
+        st.button(label, key=key, type="tertiary", width="stretch", help=_history_tooltip(item),
+                  on_click=_go, args=("result", item["id"]))
+    st.markdown('<div class="sp-sidebar-spacer"></div>', unsafe_allow_html=True)
+    email = st.session_state.auth.get("email", "") if db_enabled() and current_user_id() else "Accesso condiviso"
+    with st.container(key="account_box"):
+        card, menu = st.columns([0.8, 0.2], vertical_alignment="center")
+        card.markdown(ui.user_card(email), unsafe_allow_html=True)
+        with menu.popover("⋯", help="Account"):
+            if st.button("Esci", icon=":material/logout:", type="tertiary", width="stretch"):
+                sign_out()
                 st.rerun()
-        else:
-            st.warning("Vuoi cancellare definitivamente tutte le tue ricerche e i relativi feedback?"
-                       if db_enabled() else "Vuoi cancellare la cronologia di questa sessione?")
-            yes, no = st.columns(2)
-            if yes.button("Cancella", type="primary", width="stretch"):
-                if db_enabled():
-                    try:
-                        clear_history_db()
-                    except AuthExpired:
-                        handle_expired_session()
-                    except requests.RequestException:
+            if st.session_state.history:
+                if not st.session_state.get("confirm_clear", False):
+                    if st.button("Cancella cronologia", icon=":material/delete:", type="tertiary", width="stretch"):
+                        st.session_state.confirm_clear = True
+                        st.rerun()
+                else:
+                    st.warning("Cancellare definitivamente tutte le tue ricerche e i relativi feedback?"
+                               if db_enabled() else "Cancellare la cronologia di questa sessione?")
+                    if st.button("Sì, cancella", type="primary", width="stretch"):
+                        if db_enabled():
+                            try:
+                                clear_history_db()
+                            except AuthExpired:
+                                handle_expired_session()
+                            except requests.RequestException:
+                                st.session_state.confirm_clear = False
+                                st.error("Impossibile cancellare l'archivio. Riprova.")
+                                st.stop()
+                        st.session_state.history = []
+                        _go("home")
                         st.session_state.confirm_clear = False
-                        st.error("Impossibile cancellare l'archivio. Riprova.")
-                        st.stop()
-                st.session_state.history = []
-                st.session_state.selected_id = None
-                st.session_state.confirm_clear = False
-                st.rerun()
-            if no.button("Annulla", width="stretch"):
-                st.session_state.confirm_clear = False
-                st.rerun()
-    st.divider()
-    if db_enabled() and current_user_id():
-        st.caption(ui.esc(st.session_state.auth.get("email", "")))
-    if st.button("Esci", width="stretch"):
-        sign_out()
-        st.rerun()
-    show_legal_footer()
+                        st.rerun()
+                    if st.button("Annulla", width="stretch"):
+                        st.session_state.confirm_clear = False
+                        st.rerun()
+            st.divider()
+            show_legal_footer()
 
 save_notice = st.session_state.pop("save_notice", None)
 if save_notice:
     st.warning(save_notice)
 
 selected = next((x for x in st.session_state.history if x["id"] == st.session_state.selected_id), None)
-if selected:
+pending = st.session_state.pop("pending_query", None)
+if pending:
+    run_search(pending)
+elif st.session_state.get("view") == "stats":
+    show_stats()
+elif selected:
     show_result(selected)
 else:
     new_query = show_home()
     if new_query:
-        run_search(new_query)
+        st.session_state.pending_query = new_query
+        st.session_state.selected_id = None
+        st.rerun()
