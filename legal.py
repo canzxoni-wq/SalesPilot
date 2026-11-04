@@ -5,8 +5,8 @@ la versione accettata viene salvata nel profilo dell'utente alla registrazione.
 """
 import os
 
-LEGAL_VERSION = "2026-11-03"
-LEGAL_DATE = "3 novembre 2026"
+LEGAL_VERSION = "2026-11-04"
+LEGAL_DATE = "4 novembre 2026"
 
 
 def _controller():
@@ -30,10 +30,10 @@ SalesPilot è un **prototipo universitario** che aiuta a individuare potenziali 
 Il titolare è {name}. Per qualsiasi richiesta sulla privacy puoi scrivere a {contact}.
 
 ## 2. Quali dati trattiamo
-- **Dati dell'account:** indirizzo email e password. La password è conservata solo in forma cifrata dal fornitore di autenticazione e nessuno del gruppo può leggerla.
+- **Dati dell'account:** nome, eventuale diminutivo, forma di saluto preferita (maschile, femminile o neutra), indirizzo email e password. La password è conservata solo in forma cifrata dal fornitore di autenticazione e nessuno del gruppo può leggerla.
 - **Dati di utilizzo:** il testo delle ricerche, i risultati generati, i feedback a stelle, la data e la durata di ogni ricerca.
 - **Dati tecnici:** dati di connessione (ad esempio indirizzo IP) registrati dai fornitori di hosting e autenticazione per sicurezza e funzionamento del servizio.
-- **Dati di terzi nei risultati:** i risultati possono contenere nome, ruolo e link professionale di referenti aziendali, ricavati da fonti pubbliche (vedi punto 7).
+- **Dati di terzi nei risultati:** i risultati possono contenere nome, ruolo, link professionale (ad esempio il profilo LinkedIn) ed email professionale di referenti aziendali, solo se pubblicati in fonti accessibili a tutti (vedi punto 7), oltre ai recapiti generici delle aziende.
 
 ## 3. Perché li trattiamo e su quale base giuridica
 | Finalità | Base giuridica |
@@ -66,7 +66,7 @@ Puoi chiedere in qualsiasi momento l'accesso ai tuoi dati, la rettifica, la canc
 Se ritieni che il trattamento violi il GDPR puoi proporre reclamo al **Garante per la protezione dei dati personali** ([www.garanteprivacy.it](https://www.garanteprivacy.it)).
 
 ## 7. Dati di referenti aziendali nei risultati
-I risultati possono indicare nome, ruolo e link professionale di persone che ricoprono ruoli in aziende, ricavati da fonti pubblicamente accessibili (siti aziendali, profili professionali), allo scopo di individuare l'interlocutore pertinente in un contesto B2B. Sono mostrati solo i dati minimi necessari e nessun recapito privato. Le persone interessate possono chiedere in qualsiasi momento la cancellazione o opporsi al trattamento scrivendo a {contact}. Chi usa SalesPilot deve verificare la base giuridica e gli obblighi privacy prima di contattare queste persone per finalità commerciali.
+I risultati possono indicare nome, ruolo e link professionale di persone che ricoprono ruoli in aziende, ricavati da fonti pubblicamente accessibili (siti aziendali, profili professionali), allo scopo di individuare l'interlocutore pertinente in un contesto B2B. Sono mostrati solo i dati minimi necessari, ciascuno con la sua fonte: nessun recapito privato e nessuna email ricostruita o indovinata. Le pagine di LinkedIn non vengono lette: viene riportato solo il link al profilo quando compare nei risultati di ricerca. Le persone interessate possono chiedere in qualsiasi momento la cancellazione o opporsi al trattamento scrivendo a {contact}. Chi usa SalesPilot deve verificare la base giuridica e gli obblighi privacy prima di contattare queste persone per finalità commerciali.
 
 ## 8. Obbligatorietà
 Email e password sono necessarie per creare l'account: senza di esse non è possibile usare il servizio.

@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 
 LOGO_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets", "logo-icon.png")
 
-THEME = {
+LIGHT = {
     "primary": "#087F8C",       # pulsanti, link, barre dei punteggi
     "primary_dark": "#05606A",  # hover dei pulsanti, testo dei chip
     "on_primary": "#FFFFFF",    # testo sopra il colore primario
@@ -26,9 +26,53 @@ THEME = {
     "surface": "#FFFFFF",       # schede e barra laterale
     "border": "#DCE4E6",        # bordi
     "soft": "#E6F3F4",          # sfondo di chip ed elemento selezionato
+    "track": "#E1E7E8",         # binario delle barre e badge spento
     "warn_bg": "#FFF6E5",
     "warn_ink": "#6B4A00",
 }
+# Modalità scura: stessi ruoli, colori adatti a uno sfondo scuro (contrasto AA).
+DARK = {
+    "primary": "#2AA7B5",
+    "primary_dark": "#5CC3CE",
+    "on_primary": "#06222A",
+    "primary_text": "#6FD3DC",
+    "deep": "#0B3A44",
+    "deep_text": "#B9D3D8",
+    "accent_light": "#7FD6DE",
+    "ink": "#E6EEF0",
+    "muted": "#9FB1B6",
+    "bg": "#0F1416",
+    "surface": "#161D20",
+    "border": "#2A3538",
+    "soft": "#183238",
+    "track": "#2A3538",
+    "warn_bg": "#3A2E14",
+    "warn_ink": "#F0C66B",
+}
+# Nel codice i colori sono variabili CSS: chiaro e scuro si scambiano subito quando l'utente
+# cambia tema dal menu ⋮, senza ricaricare la pagina (vedi THEME_WATCH_JS).
+THEME = {k: f"var(--sp-{k.replace('_', '-')})" for k in LIGHT}
+
+
+def theme_vars_css():
+    light = "".join(f"--sp-{k.replace('_', '-')}: {v};" for k, v in LIGHT.items())
+    dark = "".join(f"--sp-{k.replace('_', '-')}: {v};" for k, v in DARK.items())
+    return f":root {{ {light} }} html[data-sp-theme=\"dark\"] {{ {dark} }}"
+
+
+# Legge il colore di sfondo dell'app (che Streamlit cambia con il tema) e segna la pagina come chiara o scura.
+THEME_WATCH_JS = """<script>
+(function () {
+  function apply() {
+    var app = document.querySelector('.stApp') || document.body;
+    var m = (getComputedStyle(app).backgroundColor || '').match(/\\d+/g);
+    var dark = m && (0.299 * m[0] + 0.587 * m[1] + 0.114 * m[2]) < 128;
+    document.documentElement.setAttribute('data-sp-theme', dark ? 'dark' : 'light');
+  }
+  apply();
+  if (!window.__spThemeWatch) { window.__spThemeWatch = setInterval(apply, 400); }
+})();
+</script>"""
 
 
 def esc(value):
@@ -50,10 +94,12 @@ def selected_history_css(key):
 def global_css():
     t = THEME
     return f"""<style>
-.stApp {{ background: {t['bg']}; }}
+{theme_vars_css()}
+/* Lo sfondo della pagina lo decide Streamlit (config.toml): serve allo script del tema per capire chiaro/scuro. */
 .block-container {{ max-width: 1180px; padding-top: 3.5rem; }}
 /* Nasconde solo menu e Deploy: il pulsante per riaprire la barra laterale resta visibile. */
-#MainMenu, footer, [data-testid="stMainMenu"], [data-testid="stAppDeployButton"] {{ display: none; }}
+/* Il menu ⋮ resta visibile (contiene Impostazioni → tema chiaro/scuro); nascosti solo Deploy e piè di pagina. */
+footer, [data-testid="stAppDeployButton"] {{ display: none; }}
 header[data-testid="stHeader"] {{ background: transparent; }}
 [data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapsedControl"] {{ visibility: visible; display: flex; }}
 h1, h2, h3 {{ color: {t['ink']}; letter-spacing: -0.015em; }}
@@ -130,7 +176,7 @@ button[kind^="primary"]:hover {{ background: {t['primary_dark']} !important; bor
 .sp-score-head span {{ font-size: 13px; font-weight: 600; color: {t['muted']}; }}
 .sp-score-head strong {{ font-size: 22px; color: {t['ink']}; }}
 .sp-bars {{ display: grid; grid-template-columns: 96px minmax(0, 1fr) 14px; gap: 6px 8px; align-items: center; font-size: 13px; color: {t['ink']}; }}
-.sp-track {{ height: 8px; border-radius: 4px; background: #E1E7E8; }}
+.sp-track {{ height: 8px; border-radius: 4px; background: {t['track']}; }}
 .sp-fill {{ height: 8px; border-radius: 4px; background: {t['primary']}; }}
 .sp-login-panel {{ background: {t['deep']}; color: #FFFFFF; border-radius: 16px; padding: 44px 40px; min-height: 560px; box-sizing: border-box; }}
 .sp-login-panel h1 {{ color: #FFFFFF; font-size: 36px; line-height: 1.12; margin: 28px 0 12px; }}
@@ -146,10 +192,10 @@ def logo_icon(size=34, bg=None, top=None, bars="#FFFFFF"):
     bg = bg or THEME["deep"]
     top = top or THEME["accent_light"]
     return (f'<svg width="{size}" height="{size}" viewBox="0 0 48 48" role="img" aria-label="Logo SalesPilot">'
-            f'<rect width="48" height="48" rx="12" fill="{bg}"></rect>'
-            f'<rect x="12" y="13" width="24" height="6" rx="3" fill="{top}"></rect>'
-            f'<rect x="12" y="21" width="17" height="6" rx="3" fill="{bars}" fill-opacity="0.7"></rect>'
-            f'<rect x="12" y="29" width="10" height="6" rx="3" fill="{bars}" fill-opacity="0.4"></rect></svg>')
+            f'<rect width="48" height="48" rx="12" style="fill:{bg}"></rect>'
+            f'<rect x="12" y="13" width="24" height="6" rx="3" style="fill:{top}"></rect>'
+            f'<rect x="12" y="21" width="17" height="6" rx="3" style="fill:{bars}" fill-opacity="0.7"></rect>'
+            f'<rect x="12" y="29" width="10" height="6" rx="3" style="fill:{bars}" fill-opacity="0.4"></rect></svg>')
 
 
 def _wordmark(sales_color, pilot_color, size=19):
@@ -161,11 +207,11 @@ def brand_header():
     return (f'<div class="sp-brand" style="padding:0 6px">{logo_icon(36)}{_wordmark(THEME["ink"], THEME["primary_text"], 21)}</div>')
 
 
-def user_card(email):
-    email = str(email or "")
-    initials = (email[:2] if email else "SP").upper()
-    return (f'<div class="sp-user"><span class="sp-avatar">{esc(initials)}</span>'
-            f'<span class="sp-user-text"><strong>{esc(email)}</strong><span>Account Manager</span></span></div>')
+def user_card(title, subtitle="Account Manager"):
+    title = str(title or "")
+    initials = "".join(w[0] for w in title.split()[:2]).upper() if " " in title else title[:2].upper()
+    return (f'<div class="sp-user"><span class="sp-avatar">{esc(initials or "SP")}</span>'
+            f'<span class="sp-user-text"><strong>{esc(title)}</strong><span>{esc(subtitle)}</span></span></div>')
 
 
 def _cell(value):
@@ -216,7 +262,7 @@ def login_panel():
 
 def rank_badge(position):
     top = position <= 2
-    bg = THEME["deep"] if top else "#E1E7E8"
+    bg = THEME["deep"] if top else THEME["track"]
     fg = "#FFFFFF" if top else THEME["ink"]
     sub = THEME["deep_text"] if top else THEME["muted"]
     return (f'<div class="sp-rank" style="background:{bg};color:{fg}">'
