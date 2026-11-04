@@ -2192,22 +2192,23 @@ with st.sidebar:
     visible = [it for it in reversed(st.session_state.history)
                if not needle or needle in (short_title(it["query"]) + " " + it["query"]).casefold()]
     st.markdown('<div class="sp-label">Recenti</div>', unsafe_allow_html=True)
-    if not st.session_state.history:
-        st.caption("Le tue ricerche compariranno qui.")
-    elif not visible:
-        st.caption("Nessuna ricerca trovata.")
-    group = None
-    for item in visible:
-        if _date_group(item) != group:
-            group = _date_group(item)
-            st.markdown(f'<div class="sp-group">{group}</div>', unsafe_allow_html=True)
-        key = f"history_{item['id']}"
-        if item["id"] == st.session_state.selected_id:
-            st.markdown(ui.selected_history_css(key), unsafe_allow_html=True)
-        label = ("⚠ " if item.get("error") else "") + short_title(item["query"])
-        st.button(label, key=key, type="tertiary", width="stretch",
-                  on_click=_go, args=("result", item["id"]))
-    st.markdown('<div class="sp-sidebar-spacer"></div>', unsafe_allow_html=True)
+    # Solo la cronologia scorre: menu in alto, tema e account in basso restano sempre visibili.
+    with st.container(key="recents_box"):
+        if not st.session_state.history:
+            st.caption("Le tue ricerche compariranno qui.")
+        elif not visible:
+            st.caption("Nessuna ricerca trovata.")
+        group = None
+        for item in visible:
+            if _date_group(item) != group:
+                group = _date_group(item)
+                st.markdown(f'<div class="sp-group">{group}</div>', unsafe_allow_html=True)
+            key = f"history_{item['id']}"
+            if item["id"] == st.session_state.selected_id:
+                st.markdown(ui.selected_history_css(key), unsafe_allow_html=True)
+            label = ("⚠ " if item.get("error") else "") + short_title(item["query"])
+            st.button(label, key=key, type="tertiary", width="stretch",
+                      on_click=_go, args=("result", item["id"]))
     # Tema dell'app: Sistema / Chiaro / Scuro, ricordato nel profilo dell'utente.
     if "theme_pref" not in st.session_state:
         st.session_state.theme_pref = (st.session_state.get("auth") or {}).get("theme_pref") or "System"

@@ -117,8 +117,12 @@ button[kind^="primary"]:hover {{ background: {t['primary_dark']} !important; bor
   padding: 0.75rem 0.75rem 0 0; z-index: 2; }}
 [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{ padding-top: 1.25rem; padding-bottom: 1rem; flex: 1;
   display: flex; flex-direction: column; min-height: 0; }}
-[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div {{ flex: 1; display: flex; flex-direction: column; }}
-[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] {{ flex: 1; }}
+[data-testid="stSidebar"] [data-testid="stSidebarContent"] {{ overflow: hidden; }}
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div {{ flex: 1; display: flex; flex-direction: column; min-height: 0; }}
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] {{ flex: 1; min-height: 0; }}
+/* La cronologia occupa lo spazio libero e scorre da sola. */
+[data-testid="stSidebar"] [data-testid="stLayoutWrapper"]:has(> .st-key-recents_box) {{ flex: 1 1 0; min-height: 0; display: flex; }}
+.st-key-recents_box {{ flex: 1; min-height: 0; overflow-y: auto; overflow-x: hidden; padding-bottom: 8px; }}
 /* Il blocco principale della barra occupa tutta l'altezza: l'account resta in fondo, come nelle app di chat. */
 [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 2px; }}
 /* Voci di navigazione e cronologia: righe a tutta larghezza, testo a sinistra su una riga */
@@ -131,11 +135,9 @@ button[kind^="primary"]:hover {{ background: {t['primary_dark']} !important; bor
 [data-testid="stSidebar"] .stButton button[kind="tertiary"] [data-testid="stIconMaterial"] {{ color: {t['muted']}; font-size: 20px; }}
 [data-testid="stSidebar"] .stTextInput input {{ min-height: 36px; }}
 [data-testid="stSidebar"] .stPopover button {{ min-height: 36px; border-color: transparent; background: transparent; }}
-.sp-sidebar-spacer {{ min-height: 16px; }}
-[data-testid="stSidebar"] [data-testid="stElementContainer"]:has(.sp-sidebar-spacer) {{ flex: 1; }}
 [data-testid="stSidebar"] [data-testid="stButtonGroup"] button {{ padding: 4px 6px; min-height: 34px; font-size: 13px; }}
 [data-testid="stSidebar"] [data-testid="stButtonGroup"] > div {{ flex-wrap: nowrap; }}
-[data-testid="stLayoutWrapper"]:has(> .st-key-account_box) {{ margin-top: auto; }}
+[data-testid="stLayoutWrapper"]:has(> .st-key-account_box) {{ margin-top: 0; }}
 .st-key-account_box {{ border-top: 1px solid {t['border']}; padding-top: 10px; }}
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {{ margin-bottom: 0 !important; }}
 .sp-label {{ display: block; font-size: 12px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; color: {t['muted']};
