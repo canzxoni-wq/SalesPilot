@@ -57,7 +57,7 @@ TITLES = ["Lista Prospect", "Clusterizzazione e priorità", "Informazioni chiave
 CONTACT_COLUMNS = ["Azienda", "Contatto", "Ruolo", "Telefono", "Email", "Link / fonte"]
 
 
-def merged_contacts(tables):
+def merged_contacts(tables, include_missing=False):
     rows = []
     people = {}
     for p in tables.get("contatti", []):
@@ -73,6 +73,9 @@ def merged_contacts(tables):
         for p in people.get(name, []):
             rows.append({"Azienda": name, "Contatto": p.get("Nome e cognome", ""), "Ruolo": p.get("Ruolo", ""),
                          "Telefono": "", "Email": p.get("Email", ""), "Link / fonte": p.get("Link di contatto", "")})
+        if include_missing and not rec and not people.get(name):
+            rows.append({"Azienda": name, "Contatto": "Nessun contatto trovato nelle fonti", "Ruolo": "",
+                         "Telefono": "", "Email": "", "Link / fonte": ""})
     return rows
 
 # Modelli di ricerca (interruttore "modelli_sales_headhunter" in features.py).
@@ -609,8 +612,9 @@ def extract_json(text):
         raise ValueError("La risposta AI non contiene JSON valido. Riprova.")
 
 
-def tavily_search(query, max_results=10):
-    """Ricerca web separata da Gemini: una sola chiamata Tavily per ricerca."""
+def tavily_search(query, max_results=10, raw=False):
+    """Ricerca web separata da Gemini: una sola chiamata Tavily per ricerca.
+    raw=True chiede anche il testo completo delle pagine (serve per trovare telefono ed email)."""
     if not TAVILY_API_KEY:
         return [], "Ricerca Tavily non attiva: manca TAVILY_API_KEY su Render."
     try:
@@ -618,7 +622,7 @@ def tavily_search(query, max_results=10):
             "https://api.tavily.com/search",
             headers={"Authorization": f"Bearer {TAVILY_API_KEY}", "Content-Type": "application/json"},
             json={"query": query[:450], "search_depth": "basic", "max_results": max_results,
-                  "include_answer": False, "include_raw_content": False},
+                  "include_answer": False, "include_raw_content": bool(raw)},
             timeout=25,
         )
         if not response.ok:
@@ -633,8 +637,11 @@ def tavily_search(query, max_results=10):
             parsed = urlparse(url)
             if parsed.scheme not in ("https", "http") or not parsed.netloc:
                 continue
-            results.append({"titolo": str(item.get("title", ""))[:180],
-                            "url": url[:700], "estratto": str(item.get("content", ""))[:1100]})
+            row = {"titolo": str(item.get("title", ""))[:180],
+                   "url": url[:700], "estratto": str(item.get("content", ""))[:1100]}
+            if raw:
+                row["testo"] = str(item.get("raw_content") or "")[:30000]
+            results.append(row)
         if not results:
             return [], "Tavily non ha restituito fonti utili; risultati Gemini non verificati online."
         return results, f"Ricerca Tavily completata: {len(results)} fonti web recuperate (da verificare)."
@@ -1287,7 +1294,7 @@ def excel_bytes(tables):
         for (sheet_name, columns), key in zip(SHEETS.items(), KEYS):
             if key == "contatti":
                 columns = CONTACT_COLUMNS
-                df = pd.DataFrame(merged_contacts(tables)).reindex(columns=columns, fill_value="")
+                df = pd.DataFrame(merged_contacts(tables, include_missing=True)).reindex(columns=columns, fill_value="")
             else:
                 df = pd.DataFrame(tables.get(key, [])).reindex(columns=columns, fill_value="")
             df.to_excel(writer, sheet_name=sheet_name, index=False)
@@ -1739,7 +1746,7 @@ def show_result(item):
     with tabs["Buyer persona"]:
         show_table(tables, "buyer_persona")
     with tabs["Contatti"]:
-        rows = merged_contacts(tables)
+        rows = merged_contacts(tables, include_missing=True)
         if rows:
             st.markdown(ui.html_table(rows, CONTACT_COLUMNS), unsafe_allow_html=True)
         else:

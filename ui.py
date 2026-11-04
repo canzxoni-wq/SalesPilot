@@ -112,7 +112,10 @@ button[kind^="primary"]:hover {{ background: {t['primary_dark']} !important; bor
 [data-testid="stSidebar"] {{ background: {t['surface']}; border-right: 1px solid {t['border']}; }}
 [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{ display: flex; flex-direction: column; }}
 [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{ display: flex; flex-direction: column; height: 100vh; }}
-[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{ padding-top: 0.5rem; padding-bottom: 1rem; flex: 1;
+/* La riga con il pulsante per chiudere la barra non occupa spazio: il logo parte dall'alto. */
+[data-testid="stSidebar"] [data-testid="stSidebarHeader"] {{ position: absolute; top: 0; right: 0; height: auto;
+  padding: 0.75rem 0.75rem 0 0; z-index: 2; }}
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{ padding-top: 1.25rem; padding-bottom: 1rem; flex: 1;
   display: flex; flex-direction: column; min-height: 0; }}
 [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div {{ flex: 1; display: flex; flex-direction: column; }}
 [data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] {{ flex: 1; }}
