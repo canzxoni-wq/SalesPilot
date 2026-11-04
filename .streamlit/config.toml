@@ -2,9 +2,19 @@
 headless = true
 maxUploadSize = 50
 
-[theme]
-base = "light"
+[client]
+# Menu ⋮ solo con le opzioni per chi usa l'app (Impostazioni con il tema, stampa...), senza quelle da sviluppatore.
+toolbarMode = "viewer"
+
+# Tema chiaro e scuro: si sceglie dal menu ⋮ → Settings (Usa impostazione di sistema / Chiaro / Scuro).
+[theme.light]
 primaryColor = "#087F8C"
 backgroundColor = "#F6F7F7"
 secondaryBackgroundColor = "#EEF2F3"
 textColor = "#102A33"
+
+[theme.dark]
+primaryColor = "#2AA7B5"
+backgroundColor = "#0F1416"
+secondaryBackgroundColor = "#1C2427"
+textColor = "#E6EEF0"
