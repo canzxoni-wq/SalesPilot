@@ -44,16 +44,36 @@ SUPABASE_ANON_KEY = os.getenv("SUPABASE_ANON_KEY", "")
 SUPABASE_TABLE = "salespilot_searches"
 
 SHEETS = {
-    "1. New Names": ["Azienda", "Sede", "Fatturato", "Altri dati chiave", "Fonte"],
+    "1. Prospect": ["Azienda", "Sede", "Fatturato", "Altri dati chiave", "Fonte"],
     "2. Priorità": ["Priorità", "Azienda", "Cluster", "Cambiamento", "Accessibilità", "Volume", "Totale"],
     "3. Info aziende": ["Azienda", "Cosa sapere"],
     "4. Buyer Persona": ["Ruolo", "Peso nella decisione", "Cosa gli interessa", "Primo messaggio utile"],
     "4.1 Contatti": ["Azienda", "Nome e cognome", "Ruolo", "Link di contatto", "Email"],
-    "4.2 Recapiti aziendali": ["Azienda", "Telefono", "Email", "Sito", "Fonte"],
     "5. Servizi CXI": ["Azienda", "Servizio principale", "Servizio secondario", "Aggancio al fatto"],
 }
-KEYS = ["new_names", "priorita", "informazioni", "buyer_persona", "contatti", "recapiti", "servizi_cxi"]
-TITLES = ["Lista New Names", "Clusterizzazione e priorità", "Informazioni chiave sulle aziende", "Interlocutori e Buyer Persona", "Contatti suggeriti", "Recapiti aziendali", "Servizi CXI pertinenti"]
+KEYS = ["new_names", "priorita", "informazioni", "buyer_persona", "contatti", "servizi_cxi"]
+TITLES = ["Lista Prospect", "Clusterizzazione e priorità", "Informazioni chiave sulle aziende", "Interlocutori e Buyer Persona", "Contatti", "Servizi CXI pertinenti"]
+# Tabella Contatti mostrata ed esportata: recapiti aziendali dal sito + persone, in un'unica tabella.
+CONTACT_COLUMNS = ["Azienda", "Contatto", "Ruolo", "Telefono", "Email", "Link / fonte"]
+
+
+def merged_contacts(tables):
+    rows = []
+    people = {}
+    for p in tables.get("contatti", []):
+        people.setdefault(p.get("Azienda"), []).append(p)
+    recs = {r.get("Azienda"): r for r in tables.get("recapiti", [])}
+    for company in tables.get("new_names", []):
+        name = company.get("Azienda", "")
+        rec = recs.get(name)
+        if rec:
+            rows.append({"Azienda": name, "Contatto": "Recapito aziendale", "Ruolo": "Centralino / info",
+                         "Telefono": rec.get("Telefono", ""), "Email": rec.get("Email", ""),
+                         "Link / fonte": rec.get("Fonte") or rec.get("Sito", "")})
+        for p in people.get(name, []):
+            rows.append({"Azienda": name, "Contatto": p.get("Nome e cognome", ""), "Ruolo": p.get("Ruolo", ""),
+                         "Telefono": "", "Email": p.get("Email", ""), "Link / fonte": p.get("Link di contatto", "")})
+    return rows
 
 # Modelli di ricerca (interruttore "modelli_sales_headhunter" in features.py).
 SALES, HEAD_HUNTER = "Sales", "Head Hunter"
@@ -118,6 +138,7 @@ def _store_session(data):
         "nickname": str(meta.get("nickname", "")).strip()[:40],
         "greeting_form": meta.get("greeting_form") if meta.get("greeting_form") in greetings.FORMS else "n",
         "exclude_list": str(meta.get("exclude_list", ""))[:20000],
+        "theme_pref": meta.get("theme_pref") if meta.get("theme_pref") in ("System", "Light", "Dark") else "",
     }
     st.session_state.authenticated = True
 
@@ -144,6 +165,21 @@ def update_profile(first_name, nickname, form="n", exclude_list=None):
         st.session_state.auth["exclude_list"] = exclude_list
     st.session_state.pop("greeting", None)
     return True
+
+
+def save_user_data(data):
+    """Aggiorna alcuni campi del profilo utente su Supabase (le altre chiavi restano invariate)."""
+    auth = st.session_state.get("auth") or {}
+    try:
+        response = requests.put(f"{SUPABASE_URL}/auth/v1/user",
+                                headers={"apikey": SUPABASE_ANON_KEY, "Content-Type": "application/json",
+                                         "Authorization": f"Bearer {auth.get('access_token', '')}"},
+                                json={"data": data}, timeout=15)
+        if response.ok:
+            st.session_state.auth.update(data)
+        return response.ok
+    except requests.RequestException:
+        return False
 
 
 def display_name():
@@ -1249,7 +1285,11 @@ def excel_bytes(tables):
     output = io.BytesIO()
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         for (sheet_name, columns), key in zip(SHEETS.items(), KEYS):
-            df = pd.DataFrame(tables.get(key, [])).reindex(columns=columns, fill_value="")
+            if key == "contatti":
+                columns = CONTACT_COLUMNS
+                df = pd.DataFrame(merged_contacts(tables)).reindex(columns=columns, fill_value="")
+            else:
+                df = pd.DataFrame(tables.get(key, [])).reindex(columns=columns, fill_value="")
             df.to_excel(writer, sheet_name=sheet_name, index=False)
             ws = writer.sheets[sheet_name]
             ws.freeze_panes = "A2"
@@ -1415,7 +1455,7 @@ def summary_counts(tables):
     revenues = sum(not ui.is_missing(r.get("Fatturato")) and bool(re.search(r"\d", str(r.get("Fatturato", ""))))
                    for r in companies)
     high = sum(isinstance(r.get("Totale"), (int, float)) and r["Totale"] >= 7 for r in priority_rows)
-    contacted = len({r.get("Azienda") for r in contacts if r.get("Azienda")})
+    contacted = len({r.get("Azienda") for r in merged_contacts(tables) if r.get("Azienda")})
     return len(companies), high, revenues, contacted
 
 
@@ -1684,15 +1724,12 @@ def show_result(item):
         with st.expander("Sintesi della ricerca"):
             st.markdown(item["summary"])
     head_hunter = item.get("mode") == HEAD_HUNTER
-    tab_names = ["Panoramica", "New names", "Priorità", "Info aziende", "Buyer persona",
-                 "Persone" if head_hunter else "Contatti"]
-    if on("contatti_azienda"):
-        tab_names.append("Recapiti")
-    tab_names += ["Servizi CXI", "Mappa"]
+    tab_names = ["Panoramica", "Prospect", "Priorità", "Info aziende", "Buyer persona", "Contatti",
+                 "Servizi CXI", "Mappa"]
     tabs = dict(zip(tab_names, st.tabs(tab_names)))
     with tabs["Panoramica"]:
         show_company_cards(item)
-    with tabs["New names"]:
+    with tabs["Prospect"]:
         show_table(tables, "new_names")
     with tabs["Priorità"]:
         show_table(tables, "priorita")
@@ -1701,13 +1738,14 @@ def show_result(item):
         show_table(tables, "informazioni")
     with tabs["Buyer persona"]:
         show_table(tables, "buyer_persona")
-    with tabs["Persone" if head_hunter else "Contatti"]:
-        show_table(tables, "contatti")
-        st.caption(PRIVACY_CONTACTS_NOTE)
-    if "Recapiti" in tabs:
-        with tabs["Recapiti"]:
-            show_table(tables, "recapiti")
-            st.caption("Recapiti aziendali (centralino, email generiche) presi dalle pagine ufficiali indicate in Fonte.")
+    with tabs["Contatti"]:
+        rows = merged_contacts(tables)
+        if rows:
+            st.markdown(ui.html_table(rows, CONTACT_COLUMNS), unsafe_allow_html=True)
+        else:
+            st.caption("Nessun contatto verificabile disponibile.")
+        st.caption("Recapiti aziendali presi dal sito ufficiale; persone solo se pubblicate in una fonte. "
+                   + PRIVACY_CONTACTS_NOTE)
     with tabs["Servizi CXI"]:
         show_table(tables, "servizi_cxi")
     with tabs["Mappa"]:
@@ -1732,7 +1770,7 @@ def _continue(item_id, refinement="", similar=True):
 
 
 def show_continue(item):
-    with st.container(border=True):
+    with st.container(border=True, key="continue_box"):
         st.markdown("#### Continua la ricerca")
         left, right = st.columns([0.34, 0.66], vertical_alignment="bottom")
         left.button("Trova altre aziende simili", icon=":material/add:", width="stretch",
@@ -1817,7 +1855,7 @@ def show_home():
                            format_func=lambda m: f"{m} · {MODES[m]['tagline']}")
         else:
             left.markdown('<span class="sp-muted">⏱ Di solito richiede 2–3 minuti</span>', unsafe_allow_html=True)
-        submitted = right.form_submit_button("Cerca new names", type="primary", width="stretch")
+        submitted = right.form_submit_button("Cerca", type="primary", width="stretch")
     st.markdown("**Prova con un esempio**")
     for col, (sector, text) in zip(st.columns(len(EXAMPLES)), EXAMPLES):
         col.button(f"**{sector}**  \n{text}", key=f"example_{sector}", width="stretch",
@@ -2097,6 +2135,17 @@ def _history_tooltip(item):
     return f"{item['query']}\n\n{item['date']} · {status}"
 
 
+THEME_LABELS = {"System": ":material/contrast: Auto", "Light": ":material/light_mode: Chiaro",
+                "Dark": ":material/dark_mode: Scuro"}
+
+
+def _save_theme_pref():
+    if not st.session_state.get("theme_pref"):
+        st.session_state.theme_pref = "System"
+    if db_enabled() and current_user_id():
+        save_user_data({"theme_pref": st.session_state.theme_pref})
+
+
 def _date_group(item):
     try:
         day = datetime.strptime(item["date"], "%d/%m/%Y %H:%M").date()
@@ -2149,9 +2198,15 @@ with st.sidebar:
         if item["id"] == st.session_state.selected_id:
             st.markdown(ui.selected_history_css(key), unsafe_allow_html=True)
         label = ("⚠ " if item.get("error") else "") + short_title(item["query"])
-        st.button(label, key=key, type="tertiary", width="stretch", help=_history_tooltip(item),
+        st.button(label, key=key, type="tertiary", width="stretch",
                   on_click=_go, args=("result", item["id"]))
     st.markdown('<div class="sp-sidebar-spacer"></div>', unsafe_allow_html=True)
+    # Tema dell'app: Sistema / Chiaro / Scuro, ricordato nel profilo dell'utente.
+    if "theme_pref" not in st.session_state:
+        st.session_state.theme_pref = (st.session_state.get("auth") or {}).get("theme_pref") or "System"
+    st.segmented_control("Tema", list(THEME_LABELS), key="theme_pref", format_func=THEME_LABELS.get,
+                         label_visibility="collapsed", width="stretch", on_change=_save_theme_pref)
+    st.html(ui.theme_switch_js(st.session_state.theme_pref or "System"), unsafe_allow_javascript=True)
     email = st.session_state.auth.get("email", "") if db_enabled() and current_user_id() else "Accesso condiviso"
     with st.container(key="account_box"):
         card, menu = st.columns([0.8, 0.2], vertical_alignment="center")
