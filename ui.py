@@ -98,8 +98,10 @@ def global_css():
 /* Lo sfondo della pagina lo decide Streamlit (config.toml): serve allo script del tema per capire chiaro/scuro. */
 .block-container {{ max-width: 1180px; padding-top: 3.5rem; }}
 /* Nasconde solo menu e Deploy: il pulsante per riaprire la barra laterale resta visibile. */
-/* Il menu ⋮ resta visibile (contiene Impostazioni → tema chiaro/scuro); nascosti solo Deploy e piè di pagina. */
-footer, [data-testid="stAppDeployButton"] {{ display: none; }}
+/* Il menu ⋮ di Streamlit è nascosto: il tema si sceglie dal selettore nella barra laterale,
+   che usa il menu "dietro le quinte" (vedi theme_switch_js). */
+footer, [data-testid="stAppDeployButton"], [data-testid="stMainMenu"] {{ display: none; }}
+[data-testid="stMainMenuPopover"] {{ opacity: 0 !important; pointer-events: none !important; }}
 header[data-testid="stHeader"] {{ background: transparent; }}
 [data-testid="stExpandSidebarButton"], [data-testid="stSidebarCollapsedControl"] {{ visibility: visible; display: flex; }}
 h1, h2, h3 {{ color: {t['ink']}; letter-spacing: -0.015em; }}
@@ -109,9 +111,12 @@ button[kind^="primary"] {{ background: {t['primary']} !important; border-color: 
 button[kind^="primary"]:hover {{ background: {t['primary_dark']} !important; border-color: {t['primary_dark']} !important; }}
 [data-testid="stSidebar"] {{ background: {t['surface']}; border-right: 1px solid {t['border']}; }}
 [data-testid="stSidebar"] [data-testid="stSidebarContent"] {{ display: flex; flex-direction: column; }}
-[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{ padding-top: 0.5rem; }}
+[data-testid="stSidebar"] [data-testid="stSidebarContent"] {{ display: flex; flex-direction: column; height: 100vh; }}
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] {{ padding-top: 0.5rem; padding-bottom: 1rem; flex: 1;
+  display: flex; flex-direction: column; min-height: 0; }}
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div {{ flex: 1; display: flex; flex-direction: column; }}
+[data-testid="stSidebar"] [data-testid="stSidebarUserContent"] > div > [data-testid="stVerticalBlock"] {{ flex: 1; }}
 /* Il blocco principale della barra occupa tutta l'altezza: l'account resta in fondo, come nelle app di chat. */
-[data-testid="stSidebar"] [data-testid="stVerticalBlock"]:has(.st-key-account_box):not(.st-key-account_box) {{ min-height: calc(100vh - 7rem); }}
 [data-testid="stSidebar"] [data-testid="stVerticalBlock"] {{ gap: 2px; }}
 /* Voci di navigazione e cronologia: righe a tutta larghezza, testo a sinistra su una riga */
 [data-testid="stSidebar"] .stButton button[kind="tertiary"] {{ width: 100%; min-height: 36px; padding: 6px 10px; border-radius: 8px;
@@ -123,7 +128,10 @@ button[kind^="primary"]:hover {{ background: {t['primary_dark']} !important; bor
 [data-testid="stSidebar"] .stButton button[kind="tertiary"] [data-testid="stIconMaterial"] {{ color: {t['muted']}; font-size: 20px; }}
 [data-testid="stSidebar"] .stTextInput input {{ min-height: 36px; }}
 [data-testid="stSidebar"] .stPopover button {{ min-height: 36px; border-color: transparent; background: transparent; }}
-.sp-sidebar-spacer {{ flex: 1; min-height: 24px; }}
+.sp-sidebar-spacer {{ min-height: 16px; }}
+[data-testid="stSidebar"] [data-testid="stElementContainer"]:has(.sp-sidebar-spacer) {{ flex: 1; }}
+[data-testid="stSidebar"] [data-testid="stButtonGroup"] button {{ padding: 4px 6px; min-height: 34px; font-size: 13px; }}
+[data-testid="stSidebar"] [data-testid="stButtonGroup"] > div {{ flex-wrap: nowrap; }}
 [data-testid="stLayoutWrapper"]:has(> .st-key-account_box) {{ margin-top: auto; }}
 .st-key-account_box {{ border-top: 1px solid {t['border']}; padding-top: 10px; }}
 [data-testid="stSidebar"] [data-testid="stMarkdownContainer"] {{ margin-bottom: 0 !important; }}
@@ -142,7 +150,9 @@ button[kind^="primary"]:hover {{ background: {t['primary_dark']} !important; bor
 .sp-user-text {{ display: flex; flex-direction: column; min-width: 0; line-height: 1.25; }}
 .sp-user-text strong {{ font-size: 13px; color: {t['ink']}; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }}
 .sp-user-text span {{ font-size: 12px; color: {t['muted']}; }}
-.sp-table-wrap {{ overflow-x: auto; border: 1px solid {t['border']}; border-radius: 12px; background: {t['surface']}; }}
+.stTabs [data-baseweb="tab-panel"] {{ padding-top: 1rem; }}
+.st-key-continue_box {{ margin-top: 1rem; }}
+.sp-table-wrap {{ margin-bottom: 1rem; overflow-x: auto; border: 1px solid {t['border']}; border-radius: 12px; background: {t['surface']}; }}
 .sp-table {{ width: 100%; border-collapse: collapse; font-size: 14px; }}
 .sp-table th {{ text-align: left; padding: 10px 12px; background: {t['bg']}; color: {t['muted']}; font-size: 13px; font-weight: 600;
   border-bottom: 1px solid {t['border']}; white-space: nowrap; }}
@@ -221,6 +231,34 @@ def _cell(value):
         label = urlparse(url).netloc.replace("www.", "") or "link"
         return f'<a href="{esc(url)}" target="_blank" rel="noopener noreferrer">{esc(label)}</a>'
     return esc(text) if text.strip() else '<span class="sp-dim">–</span>'
+
+
+def theme_switch_js(want):
+    """Applica il tema scelto (System/Light/Dark) usando il selettore nativo di Streamlit, nascosto."""
+    want = want if want in ("System", "Light", "Dark") else "System"
+    return """<script>
+(function () {
+  var want = "%s";
+  function current() {
+    try { return JSON.parse(localStorage.getItem('stActiveTheme-/-v2') || '"System"'); } catch (e) { return 'System'; }
+  }
+  if (current() === want) { return; }
+  var tries = 0;
+  (function attempt() {
+    var menu = document.querySelector('[data-testid="stMainMenu"] button');
+    if (!menu) { if (tries++ < 30) { setTimeout(attempt, 150); } return; }
+    menu.click();
+    setTimeout(function () {
+      var option = document.querySelector('[data-testid="stMainMenuItem-theme-' + want + '"]');
+      if (option) { option.click(); }
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      setTimeout(function () {
+        if (document.querySelector('[data-testid="stMainMenuPopover"]')) { menu.click(); }
+      }, 120);
+    }, 120);
+  })();
+})();
+</script>""" % want
 
 
 def steps_list(steps, running=True):
