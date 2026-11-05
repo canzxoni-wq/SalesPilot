@@ -1066,14 +1066,14 @@ def gemini_results(query, progress=None, mode=SALES, exclude=()):
     if not API_KEY:
         raise ValueError("Manca GEMINI_API_KEY nelle variabili d'ambiente di Render")
     step("Cerco aziende e fonti sul web")
-    web_results, web_note = tavily_search(query)
+    expected = requested_company_count(query)
+    web_results, web_note = tavily_search(query, max_results=min(20, max(10, 2 * (expected or 0))))
     # Ricerca di aziende PRIMA dei contatti. Un secondo insieme di risultati
     # aumenta la copertura, senza introdurre aziende prive di riscontri.
-    expected = requested_company_count(query)
     if ((expected and expected > 1) or head_hunter) and TAVILY_API_KEY:
         extra_query = (query[:260] + " elenco operatori aziende alternative "
                        "sede clienti fatturato fonti ufficiali")
-        extra_results, extra_note = tavily_search(extra_query, max_results=10)
+        extra_results, extra_note = tavily_search(extra_query, max_results=min(20, max(10, 2 * (expected or 0))))
         known_urls = {r["url"] for r in web_results}
         for result in extra_results:
             if result["url"] not in known_urls:
@@ -1093,7 +1093,10 @@ PRIORITÀ ASSOLUTA: seleziona prima le aziende che rispettano i requisiti
 richiesti. Non scegliere o scartare MAI un'azienda in base alla disponibilità
 pubblica dei nomi dei dirigenti o dei loro profili. Se il numero richiesto è
 raggiungibile con fonti sufficienti, restituisci almeno quel numero di aziende. Cerca di individuare almeno N+2 candidati, per poi selezionare N aziende pertinenti.
-Se non è raggiungibile, restituisci solo quelle supportate e spiega i limiti.
+Un requisito che le fonti non riescono a dimostrare (fatturato, sede, dimensione) NON è un motivo
+per scartare un'azienda pertinente: includila e scrivi "Non verificato" nel dato mancante.
+Escludi un'azienda solo se le fonti mostrano che è chiaramente fuori target.
+Se anche così il numero non è raggiungibile, restituisci quelle trovate e spiega i limiti.
 La ricerca dei contatti è una fase successiva, indipendente dalla selezione.
 
 FONTI WEB TAVILY (risultati di ricerca, non verifiche definitive):
@@ -1129,7 +1132,7 @@ CATALOGO SERVIZI CXI (Company Profile CXI 2026 + Use Case):
 REGOLE PER LE TABELLE:
 - 'new_names': restituisci solo aziende reali; ricerca attivamente ricavi/fatturato per ogni azienda; il campo 'Fatturato' è OBBLIGATORIO quando esiste una fonte attendibile, con importo e anno, distinguendo il dato del gruppo da quello della società. Non usare 'Non verificato' per comodità, ma non inventare importi. Se manca una fonte ma conosci una cifra plausibile, indica esplicitamente 'Stima: X € (ANNO)'; non presentare mai una stima come dato verificato. Se non conosci alcun valore affidabile, scrivi 'Dato non disponibile'. Se la richiesta specifica clienti energia, ricavi, sedi, o altre soglie, riporta quei dati in 'Altri dati chiave'. 'Fonte' deve contenere URL autentici e pertinenti se conosciuti con sufficiente certezza, altrimenti 'Non verificato'.
 - OBBLIGATORIO: ogni elemento di new_names deve avere 'Azienda' non vuota. Se non sai identificare un'impresa reale, cerca un'altra impresa pertinente; non lasciare nomi vuoti, non inventare aziende.
-- Se trovi MENO aziende del numero richiesto, dichiaralo ESPLICITAMENTE nella 'sintesi': «Richieste N aziende; trovate solo M aziende che soddisfano i requisiti». Spiega brevemente il motivo o i requisiti che non sei riuscito a verificare. NON riempire con aziende fuori target e NON presentare l'elenco come completo.
+- Se trovi MENO aziende del numero richiesto, dichiaralo ESPLICITAMENTE nella 'sintesi': «Richieste N aziende; trovate solo M aziende che soddisfano i requisiti». Spiega brevemente il motivo o i requisiti che non sei riuscito a verificare. NON riempire con aziende chiaramente fuori target e NON presentare l'elenco come completo; ma prima di fermarti usa TUTTE le fonti, comprese le pagine di elenchi e classifiche, che spesso citano molte aziende pertinenti.
 - Per selezionare i prospect confronta prima più candidati e privilegia quelli con potenziale CXI (Cambiamento + Accessibilità + Volume), non semplicemente i più noti. Il ranking finale è calcolato dal codice sui candidati inclusi.
 - La graduatoria deve essere consecutiva e riferita SOLO alle aziende effettivamente incluse. Non lasciare posizioni saltate (es. 1, 2, 4, 5).
 - 'priorita', 'informazioni', 'servizi_cxi': una riga per ogni azienda di 'new_names', senza aggiungere aziende estranee. 'informazioni' contiene fatti e indizi commerciali specifici, distinguendo ipotesi.
@@ -1165,21 +1168,28 @@ REGOLE PER LE TABELLE:
     summary, tables = normalize_result(extract_json(raw))
     # Se il primo passaggio restituisce meno aziende, ripeti UNA volta la generazione
     # con fonti aggiuntive. Non modificare la selezione in base ai contatti.
-    if expected and len(tables["new_names"]) < expected and TAVILY_API_KEY:
-        step("Cerco altre aziende per arrivare al numero richiesto")
+    extra_angles = (" elenco classifica migliori aziende operatori nome",
+                    " altre aziende alternative concorrenti elenco bilanci sito ufficiale")
+    for attempt, angle in enumerate(extra_angles, 1):
+        if not (expected and len(tables["new_names"]) < expected and TAVILY_API_KEY):
+            break
+        step("Cerco altre aziende per arrivare al numero richiesto"
+             + (f" (tentativo {attempt})" if attempt > 1 else ""))
         missing = expected - len(tables["new_names"])
         already = [r["Azienda"] for r in tables["new_names"]]
-        extra_sources, _ = tavily_search(query[:230] + " aziende operatori alternative elenco bilanci", max_results=10)
-        retry_prompt = prompt + ("\n\nSECONDO TENTATIVO: il primo risultato conteneva solo "
+        extra_sources, _ = tavily_search(query[:230] + angle, max_results=20)
+        retry_prompt = prompt + ("\n\nTENTATIVO DI COMPLETAMENTO: il risultato precedente conteneva solo "
             + str(len(already)) + " aziende rispetto a " + str(expected)
-            + " richieste. Cerca almeno " + str(missing) + " aziende aggiuntive pertinenti, "
-            + "senza inventare requisiti. Ricrea TUTTE le tabelle JSON con "
-            + "almeno " + str(expected) + " aziende, se le fonti lo permettono. "
+            + " richieste. MANTIENI le aziende già identificate e aggiungine almeno " + str(missing)
+            + " DIVERSE, pertinenti alla richiesta, prese dalle fonti (anche da elenchi e classifiche). "
+            + "Un requisito non dimostrato non è motivo di esclusione: scrivi 'Non verificato'. "
+            + "Ricrea TUTTE le tabelle JSON con almeno " + str(expected) + " aziende, "
+            + "senza inventare aziende inesistenti. "
             + "Aziende gia identificate: " + json.dumps(already, ensure_ascii=False)
-            + "\nALTRE FONTI: " + json.dumps(extra_sources, ensure_ascii=False)[:22000])
+            + "\nALTRE FONTI: " + json.dumps(extra_sources, ensure_ascii=False)[:30000])
         try:
             retry_payload = {"contents":[{"parts":[{"text":retry_prompt}]}],
-                "generationConfig":{"temperature":0.2,"responseMimeType":"application/json"}}
+                "generationConfig":{"temperature":0.3,"responseMimeType":"application/json"}}
             retry = requests.post(url, params={"key":API_KEY},json=retry_payload,timeout=110)
             if retry.ok:
                 retry_raw = "\n".join(part.get("text", "") for part in retry.json()["candidates"][0]["content"]["parts"])
@@ -1270,6 +1280,19 @@ def requested_company_count(query):
         match = re.search(pattern, q)
         if match:
             return int(match.group(1))
+    # Qualsiasi altro tipo di attività ("10 pizzerie", "dieci hotel"), escluse unità e soglie.
+    words = {"due": 2, "tre": 3, "quattro": 4, "cinque": 5, "sei": 6, "sette": 7, "otto": 8,
+             "nove": 9, "dieci": 10, "undici": 11, "dodici": 12, "quindici": 15, "venti": 20}
+    units = ("milion", "miliard", "mila", "mln", "mld", "euro", "€", "dipendent", "addett", "anni", "anno",
+             "km", "chilometr", "metri", "mq", "%", "per cento", "clienti", "utenti", "sedi", "punti",
+             "stelle", "posti", "letti", "camere", "minuti", "ore", "giorni", "mesi", "volte")
+    num = r"(\d{1,3}|" + "|".join(words) + r")"
+    for match in re.finditer(r"\b(?:trova|trovami|cerca|cercami|individua|seleziona|elenca|dammi|mostrami|voglio)"
+                             r"\s+(?:almeno\s+|massimo\s+|circa\s+|le\s+|i\s+|gli\s+)?" + num + r"\s+(\S+)", q):
+        value, noun = match.group(1), match.group(2)
+        if not noun.startswith(units):
+            n = int(value) if value.isdigit() else words[value]
+            return n if 0 < n <= 50 else None
     return None
 
 
